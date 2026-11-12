@@ -1,8 +1,12 @@
 import * as pdfjs from "/pdfjs/legacy/build/pdf.mjs"
 import "./offline.mjs"
 import { installTools } from "./workspace-tools.mjs"
+import { installDocumentGestures } from "./document-gestures.mjs"
+import { installConverter } from "./converter.mjs"
+import { installReadingView } from "./reading-view.mjs"
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdfjs/legacy/build/pdf.worker.mjs"
+const converter = installConverter(pdfjs)
 const byId = id => document.getElementById(id)
 const $ = Object.fromEntries(Array.from(document.querySelectorAll("[id]"), item => [item.id, item]))
 const owner = new URLSearchParams(location.hash.slice(1)).get("owner") ||
@@ -49,6 +53,7 @@ let tabsRendered = ""
 let networkState = "Connected"
 let queuedChanges = []
 let flushing = false
+let requestedPhone
 const tabViews = new Map()
 try { queuedChanges = JSON.parse(localStorage.getItem("elleson-pending-edits") || "[]") } catch {}
 const persistQueue = () => {
@@ -232,6 +237,7 @@ function setMode(value) {
   mode = value
   draft = null
   $["pdf-sheet"].dataset.mode = mode
+  $["drawing-done"].hidden = !["pen", "highlight"].includes(mode)
   for (const button of document.querySelectorAll("[data-mode]")) button.setAttribute("aria-pressed", button.dataset.mode === mode)
   if (current?.extension === "pdf") {
     drawMarks()
@@ -262,6 +268,11 @@ function refresh() {
       if (current?.extension === "pdf") drawMarks()
       if (queuedChanges.length && !flushing) void flushQueue()
       if (state.handoff) void tools.receiveHandoff(state.handoff).catch(fail)
+      if (state.pairRequest && requestedPhone !== state.pairRequest.id) {
+        requestedPhone = state.pairRequest.id
+        $["approve-phone-address"].textContent = "Device on your network: " + state.pairRequest.address
+        if (!$["approve-phone-dialog"].open) $["approve-phone-dialog"].showModal()
+      }
       if (marker !== localSequence) return
       if (!Object.hasOwn(state, "document")) return
       revision = state.revision
@@ -269,6 +280,7 @@ function refresh() {
       const oldVersion = current?.contentVersion
       if (before && before !== state.document?.id) tabViews.set(before, { page, zoom, scroll: $.stage.scrollTop })
       current = state.document
+      if (before !== current?.id && readingView.active) void readingView.close()
       layout()
       if (before !== current?.id) {
         selectedWordIndex = null
@@ -845,6 +857,27 @@ $.pair.addEventListener("submit", async event => {
     await tools.acceptPendingHandoff()
   } catch (error) { fail(error) }
 })
+for (const [id, approve] of [["approve-phone", true], ["reject-phone", false]]) byId(id).onclick = async () => {
+  try { await postJson("/api/pair-request/approve", { id: requestedPhone, approve }); $["approve-phone-dialog"].close() }
+  catch (error) { fail(error) }
+}
+$["request-pair"].onclick = async () => {
+  const button = $["request-pair"], label = $["pair-request-status"]
+  button.disabled = true
+  try {
+    const ticket = await (await postJson("/api/pair-request", {})).json()
+    label.textContent = "Approve the connection on your PC…"
+    while (!credential) {
+      await new Promise(resolve => setTimeout(resolve, 1500))
+      const result = await (await postJson("/api/pair-request/status", ticket)).json()
+      if (!result.token) continue
+      credential = result.token; sessionStorage.setItem("elleson-session", credential); localStorage.setItem("elleson-session", credential)
+      revision = -1; layout(); await refresh(); await tools.acceptPendingHandoff()
+    }
+    label.textContent = "Connected"
+  } catch (error) { label.textContent = error.message }
+  finally { button.disabled = false }
+}
 $.connect.addEventListener("click", async () => {
   if (location.hostname === "appassets.androidplatform.net" && window.EllesonAndroid) {
     window.EllesonAndroid.connectPC()
@@ -968,8 +1001,28 @@ $.undo.addEventListener("click", () => {
 $.organize.addEventListener("click", () => {
   $["pages-current"].textContent = "Current page " + page + " of " + current.pages
   $["page-order"].value = Array.from({ length: current.pages }, (_, index) => index + 1).join(", ")
+  renderOrganizer()
   $["pages-dialog"].showModal()
 })
+function renderOrganizer() {
+  const order = $["page-order"].value.split(",").map(value => Number(value.trim())).filter(value => Number.isInteger(value) && value > 0 && value <= current.pages)
+  const source = pdf
+  $["page-organizer"].replaceChildren(...order.map((number, index) => {
+    const card = document.createElement("div"), label = document.createElement("strong"), canvas = document.createElement("canvas")
+    label.textContent = "Page " + number; card.append(canvas, label)
+    if (source) void source.getPage(number).then(async page => {
+      if (!card.isConnected) return
+      const frame = page.getViewport({ scale: 80 / page.getViewport({scale:1}).width }); canvas.width = Math.ceil(frame.width); canvas.height = Math.ceil(frame.height)
+      await page.render({ canvas, viewport: frame }).promise
+    }).catch(() => {})
+    for (const [text, offset] of [["Move earlier", -1], ["Move later", 1]]) {
+      const button = document.createElement("button"); button.textContent = text; button.disabled = order[index + offset] === undefined
+      button.onclick = () => { [order[index], order[index + offset]] = [order[index + offset], order[index]]; $["page-order"].value = order.join(", "); renderOrganizer() }; card.append(button)
+    }
+    return card
+  }))
+}
+$["page-order"].addEventListener("change", renderOrganizer)
 const selectedPages = () => $["page-order"].value.split(",").map(value => Number(value.trim()) - 1)
 async function changePages(action, pages) {
   $["pages-dialog"].close()
@@ -1135,6 +1188,20 @@ $.recognize.addEventListener("click", async () => {
 })
 
 const inkCanvas = $["ink-canvas"]
+$["drawing-done"].addEventListener("click", async () => {
+  const button = $["drawing-done"]
+  button.disabled = true
+  try {
+    if (draft) { const mark = draft; draft = null; if (mark.points.length > 1) await edit(mark) }
+    const saved = await pendingEdit
+    if (saved === false && !queuedChanges.length) { status("The last drawing could not be saved. Keep this document open and retry."); return }
+    setMode("read")
+    status(queuedChanges.length ? "Drawing retained on this device; waiting to sync. Keep the app open." : "Drawing kept in this document. Use Save to update your file.")
+  } finally { button.disabled = false }
+})
+installDocumentGestures({ stage: $.stage, sheet: $["pdf-sheet"], getZoom: () => zoom,
+  setZoom: value => { zoom = value }, render: renderPage,
+  cancelStroke: () => { draft = null; drawMarks(); if (current) void postJson("/api/preview/" + current.id, {}).catch(() => {}) } })
 function canvasPoint(event) {
   const rect = inkCanvas.getBoundingClientRect()
   return [event.clientX - rect.left, event.clientY - rect.top]
@@ -1305,8 +1372,18 @@ const tools = installTools({ get: () => ({ current, page, zoom, viewport, mode, 
   setView: (number, magnification) => { page = number || 1; zoom = magnification || 1 },
   pending: () => pendingEdit, invalidate: () => { revision = -1 },
   selectWord: index => { selectedWordIndex = index; layout() } })
+$["share-as"].onclick = async () => {
+  if (!current) return
+  try {
+    await pendingEdit
+    const response = await request("/api/save/" + current.id + "?transfer=1"), blob = await response.blob()
+    converter.open([new File([blob], current.filename.replace(/\.[^.]+$/, "." + (current.saveExtension || current.extension)), {type:blob.type})])
+  } catch (error) { fail(error) }
+}
+const readingView = installReadingView({ pdfjs, request, get: () => current, go, fail })
 layout()
 status(credential ? "Ready" : "Enter the pairing code from your PC.")
+if (!credential) setTimeout(() => { if (!credential) $["request-pair"].click() }, 600)
 window.addEventListener("elleson-open-file", event => void (async () => {
   if (location.hostname !== "appassets.androidplatform.net") return
   document.activeElement?.blur()

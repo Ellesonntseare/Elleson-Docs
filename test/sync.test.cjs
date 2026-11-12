@@ -90,6 +90,7 @@ test("paired editors exchange real PDF and DOCX changes and export from either c
   }
   assert.equal((await host.exportFile(documentId)).filename, "review - copy.pdf")
   await pc.evaluate(() => { window.print = () => { window.ellesonPrinted = true } })
+  if (!(await pc.locator("#print").isVisible())) await pc.locator("#more-actions").click()
   await pc.getByRole("button", { name: "Print", exact: true }).click()
   await pc.waitForFunction(() => window.ellesonPrinted === true)
   assert.equal(await pc.locator("#print-area canvas").count(), 2)

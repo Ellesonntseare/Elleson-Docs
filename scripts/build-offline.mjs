@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url)
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const target = path.join(root, ".build", "android-assets", "app")
 await mkdir(target, { recursive: true })
+await build({ entryPoints: [path.join(root, 'conversion-engine.mjs')], outfile: path.join(root, 'web', 'conversion-runtime.mjs'), bundle: true, format: 'esm', platform: 'browser', target: 'es2022' })
 await build({
   entryPoints: [path.join(root, "offline-engine.mjs")], outfile: path.join(root, "web", "offline-runtime.mjs"),
   bundle: true, format: "esm", platform: "browser", target: "es2022",

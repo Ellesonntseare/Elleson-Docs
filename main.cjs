@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain } = require("electron")
+const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron")
 const fs = require("node:fs/promises")
 const path = require("node:path")
 const { start } = require("./server.cjs")
@@ -70,13 +70,39 @@ else {
       if (event.sender !== window.webContents) return false
       const exported = await host.exportFile(id, { flatten: options?.flatten === true })
       const { filename, bytes, changeNumber } = exported
-      const result = await dialog.showSaveDialog(window, { defaultPath: filename })
+      const result = await dialog.showSaveDialog(window, { defaultPath: options?.saveAs ? filename.replace(/ - copy(?=\.[^.]+$)/, "") : filename })
       if (result.canceled) return false
+      if (path.extname(result.filePath).toLowerCase() !== "." + exported.extension) throw new Error("Keep the ." + exported.extension + " extension. Use Convert files for another format.")
       await fs.writeFile(result.filePath, bytes)
       await host.markSaved(id, changeNumber, exported)
-      if (!originalFiles.has(id)) originalFiles.set(id, { filename: result.filePath, hash: hashBytes(bytes) })
+      if (!originalFiles.has(id) || options?.saveAs) originalFiles.set(id, { filename: result.filePath, hash: hashBytes(bytes) })
+      if (options?.saveAs && host.getDocument()?.extension === exported.extension) await host.renameDocument(id, path.basename(result.filePath))
       await rememberOriginalFiles()
       return true
+    })
+    ipcMain.handle("save-converted", async (event, name, values) => {
+      if (event.sender !== window.webContents || typeof name !== "string" || !Array.isArray(values) || values.length > 200 * 1024 * 1024 || !values.every(value => Number.isInteger(value) && value >= 0 && value <= 255)) throw new Error("Invalid converted file.")
+      const result = await dialog.showSaveDialog(window, { defaultPath: path.basename(name), properties: ["showOverwriteConfirmation", "createDirectory"] })
+      if (result.canceled) return false
+      const temporary = result.filePath + ".elleson-" + require("node:crypto").randomUUID() + ".tmp"
+      try { await fs.writeFile(temporary, Buffer.from(values), { flag: "wx" }); await fs.rename(temporary, result.filePath) }
+      catch (error) { await fs.unlink(temporary).catch(() => {}); throw error }
+      shell.showItemInFolder(result.filePath)
+      return true
+    })
+    ipcMain.handle("rename-document", async (event, id, name) => {
+      if (event.sender !== window.webContents || typeof name !== "string" || !name.trim() || name.length > 180 || /[\\/:*?"<>|\u0000-\u001f]/.test(name)) throw new Error("Choose a valid filename.")
+      const original = originalFiles.get(id)
+      if (original) {
+        const destination = path.join(path.dirname(original.filename), name.trim())
+        if (path.extname(destination).toLowerCase() !== path.extname(original.filename).toLowerCase()) throw new Error("Keep the current file extension.")
+        if (destination === original.filename) return true
+        // An exclusive copy avoids silently replacing another file with this name.
+        await fs.copyFile(original.filename, destination, require("node:fs").constants.COPYFILE_EXCL)
+        try { await fs.unlink(original.filename) } catch (error) { await fs.unlink(destination).catch(() => {}); throw error }
+        original.filename = destination; await rememberOriginalFiles()
+      }
+      await host.renameDocument(id, name.trim()); return true
     })
     ipcMain.handle("save-original", async (event, id) => {
       if (event.sender !== window.webContents) return false

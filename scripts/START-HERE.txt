@@ -1,4 +1,9 @@
-ELLESON DOCS 0.3.0
+ELLESON DOCS 0.4.0 PREVIEW 1
+
+This is a preview update. See resources/app/UPDATE-STATUS.md for limitations.
+New: Convert files, New documents, scanner filters, drawing Done, continuous
+reading, password-protected PDF copies, Save As, Rename, and easier pairing.
+More contains additional saving, scanning, printing and document actions.
 
 WINDOWS
 Extract the complete Windows ZIP and run Elleson Docs.exe.

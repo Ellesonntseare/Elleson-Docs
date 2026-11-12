@@ -2,11 +2,72 @@ export function installTools(app) {
   const $ = id => document.getElementById(id)
   const on = (id, event, handler) => $(id).addEventListener(event, (...args) => Promise.resolve(handler(...args)).catch(app.fail))
   const local = location.hostname === "appassets.androidplatform.net"
-  for (const id of ["save-original", "handoff", "print"]) $("history-actions").append($(id))
+  on("new-document", "click", () => $("new-dialog").showModal())
+  on("new-cancel", "click", () => $("new-dialog").close())
+  on("new-form", "submit", async event => {
+    event.preventDefault()
+    const { wordBytes, textPdf } = await import("./conversion-runtime.mjs")
+    const extension = $("new-type").value, text = $("new-text").value
+    const name = $("new-name").value.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").replace(/\.(pdf|docx)$/i, "") || "Untitled"
+    const bytes = extension === "pdf" ? await textPdf(text, {}) : await wordBytes(text)
+    await app.request("/api/open", { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(name + "." + extension) }, body: bytes })
+    app.invalidate(); await app.refresh(); $("new-dialog").close()
+    app.setMode(extension === "pdf" ? "text" : "word")
+  })
+  for (const id of ["save-original", "save-as", "share-as", "rename-document", "handoff", "print"]) $("history-actions").append($(id))
+  on("save-as", "click", async () => {
+    const state = app.get(); if (!state.current) { app.status("Open or create a document first."); return }
+    await app.pending()
+    if (window.desktopDocs) { await window.desktopDocs.save(state.current.id, { saveAs: true }); app.invalidate(); await app.refresh() }
+    else $("save").click()
+  })
+  on("rename-document", "click", async () => {
+    const state = app.get(); if (!state.current) return
+    $("rename-name").value = state.current.filename; $("rename-error").textContent = ""
+    $("rename-help").textContent = window.desktopDocs ? "Keep the current file extension. An existing file with this name will not be replaced." : "This changes the document name in Elleson Docs. Use Save As to create a file with this name."
+    $("rename-dialog").dataset.document = state.current.id; $("rename-dialog").showModal()
+  })
+  on("rename-cancel", "click", () => $("rename-dialog").close())
+  on("rename-form", "submit", async event => {
+    event.preventDefault()
+    const id = $("rename-dialog").dataset.document, name = $("rename-name").value.trim()
+    if (app.get().current?.id !== id) { $("rename-error").textContent = "The active document changed. Close and try again."; return }
+    try {
+      await app.pending()
+      if (window.desktopDocs?.rename) await window.desktopDocs.rename(id, name)
+      else await app.postJson("/api/rename/" + id, { name })
+      app.invalidate(); await app.refresh(); $("rename-dialog").close()
+    } catch (error) { $("rename-error").textContent = error.message }
+  })
+  const compact = matchMedia("(max-width: 600px)")
+  const extraActions = ["new-document", "convert-files", "open", "library", "connect", "find"].map(id => ({ element: $(id), marker: document.createComment(id) }))
+  for (const item of extraActions) item.element.before(item.marker)
+  const arrangeActions = () => { for (const item of extraActions) { if (compact.matches) $("history-actions").append(item.element); else item.marker.after(item.element) } }
+  compact.addEventListener("change", arrangeActions); arrangeActions()
+  const welcomeActions = document.createElement("div"); welcomeActions.className = "welcome-actions"
+  for (const [label, id] of [["New document", "new-document"], ["Scan document", "scan"], ["Convert files", "convert-files"], ["Recent documents", "library"]]) {
+    const button = document.createElement("button"); button.textContent = label; button.onclick = () => $(id).click(); welcomeActions.append(button)
+  }
+  $("welcome").append(welcomeActions)
   document.addEventListener("keydown", event => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); $(event.shiftKey ? "save" : "save-original").click() }
   })
   const readBase64 = blob => new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result.split(",")[1]); reader.onerror = reject; reader.readAsDataURL(blob) })
+  on("protect-pdf", "click", () => { $("protect-form").reset(); $("protect-error").textContent = ""; $("protect-dialog").showModal() })
+  on("protect-cancel", "click", () => { $("protect-form").reset(); $("protect-dialog").close() })
+  on("protect-form", "submit", async event => {
+    event.preventDefault()
+    const password = $("protect-password").value, state = app.get()
+    if (password !== $("protect-confirm").value) { $("protect-error").textContent = "Passwords do not match."; return }
+    try {
+      await app.pending()
+      const response = await app.postJson("/api/protect/" + state.current.id, { password })
+      const name = state.current.filename.replace(/\.pdf$/i, " - protected.pdf")
+      if (window.desktopDocs?.saveConverted) await window.desktopDocs.saveConverted(name, Array.from(new Uint8Array(await response.arrayBuffer())))
+      else await download(response, name)
+      $("protect-form").reset(); $("protect-dialog").close()
+    } catch (error) { $("protect-error").textContent = error.message }
+  })
   const download = async (response, name) => {
     const blob = await response.blob()
     if (window.EllesonAndroid) { window.EllesonAndroid.saveData(await readBase64(blob), name, "", ""); return }
@@ -268,10 +329,22 @@ export function installTools(app) {
       read: "view", edit: "edit", text: "fill", pen: "fill", highlight: "fill", erase: "fill", select: "fill", recognize: "scan", "ocr-language": "scan", signature: "fill", organize: "pages", "ink-color": "fill", "ink-width": "fill", undo: "fill", "pdf-image": "edit", review: "edit"
     }
     for (const control of $("pdf-tools").children) {
+      if (control.id === "drawing-done") continue
       const key = control.dataset.mode || control.id || control.querySelector("[id]")?.id
       control.hidden = group !== "all" && (groups[key] || "view") !== group
     }
   }))
+  let scanPreviewSequence = 0
+  async function previewScan() {
+    const item = scans[scanIndex], sequence = ++scanPreviewSequence
+    if (!item) return
+    const { prepareImage } = await import("./scan-runtime.mjs")
+    const blob = await prepareImage(item.file, item)
+    if (sequence !== scanPreviewSequence || item !== scans[scanIndex] || !$("scan-dialog").open) return
+    const image = $("scan-preview")
+    if (image.src.startsWith("blob:")) URL.revokeObjectURL(image.src)
+    image.src = URL.createObjectURL(blob); image.style.transform = "none"
+  }
   async function showScan() {
     const item = scans[scanIndex]
     if (!item) return
@@ -279,6 +352,7 @@ export function installTools(app) {
     if (image.src.startsWith("blob:")) URL.revokeObjectURL(image.src)
     image.src = URL.createObjectURL(item.file); image.style.transform = "rotate(" + item.angle + "deg)"
     $("scan-angle").value = item.angle; $("scan-angle-value").textContent = item.angle + "°"; $("scan-filter").value = item.filter
+    for (const key of ["brightness", "contrast", "sharpness", "whitening"]) $("scan-" + key).value = item[key] || 0
     $("scan-pages").replaceChildren(...scans.map((page, index) => {
       const button = document.createElement("button"); button.textContent = "Page " + (index + 1); button.setAttribute("aria-pressed", index === scanIndex)
       button.onclick = () => { saveScanSettings(); scanIndex = index; void showScan().catch(app.fail) }; return button
@@ -296,11 +370,16 @@ export function installTools(app) {
       label.append(row); return label
     }))
     if (!$("scan-dialog").open) $("scan-dialog").showModal()
+    await previewScan()
   }
   function saveScanSettings() {
     const item = scans[scanIndex]
     if (item) { item.angle = Number($("scan-angle").value); item.filter = $("scan-filter").value }
+    if (item) for (const key of ["brightness", "contrast", "sharpness", "whitening"]) item[key] = Number($("scan-" + key).value)
   }
+  for (const key of ["filter", "angle", "brightness", "contrast", "sharpness", "whitening"]) on("scan-" + key, "change", async () => { saveScanSettings(); await previewScan() })
+  on("scan-reset", "click", async () => { const item = scans[scanIndex]; Object.assign(item, { filter: "photo", angle: 0, brightness: 0, contrast: 0, sharpness: 0, whitening: 0, corners: [[0,0],[1,0],[1,1],[0,1]] }); await showScan() })
+  on("scan-apply-all", "click", async () => { saveScanSettings(); const source = scans[scanIndex]; for (const item of scans) for (const key of ["filter", "brightness", "contrast", "sharpness", "whitening"]) item[key] = source[key]; app.status("Filter settings applied to all scan pages.") })
   on("scan-add", "click", () => { saveScanSettings(); $("scan-file").value = ""; $("scan-file").click() })
   on("scan-auto", "click", async () => {
     saveScanSettings(); const { detectCorners } = await import("./scan-runtime.mjs")

@@ -28,6 +28,7 @@ async function start(port = 0, recoveryDirectory) {
   const library = new DocumentLibrary(recoveryDirectory ? path.join(recoveryDirectory, "library") : null)
   await library.load()
   let pairing
+  let pairRequest
   let mobile
   let mobileUntil = 0
   let lastPhoneSeen = 0
@@ -59,11 +60,25 @@ async function start(port = 0, recoveryDirectory) {
   web.use(express.static(path.join(__dirname, "web")))
   web.use("/vendor/docx", express.static(path.dirname(require.resolve("docx-preview"))))
   web.use("/vendor/jszip", express.static(path.join(path.dirname(require.resolve("jszip/package.json")), "dist")))
+  web.use("/vendor/tesseract", express.static(path.join(path.dirname(require.resolve("tesseract.js/package.json")), "dist")))
+  web.use("/vendor/tesseract-core", express.static(path.dirname(require.resolve("tesseract.js-core/package.json"))))
+  for (const language of ["eng", "fra", "spa"]) web.use("/vendor/ocr-data", express.static(require("@tesseract.js-data/" + language).langPath))
   const pdfRoot = path.dirname(require.resolve("pdfjs-dist/package.json"))
   for (const folder of ["legacy/build", "cmaps", "standard_fonts", "wasm"]) {
     web.use("/pdfjs/" + folder, express.static(path.join(pdfRoot, folder)))
   }
   web.use(express.json({ limit: "384kb" }))
+  web.post("/api/pair-request", (request, response) => {
+    if (pairRequest && pairRequest.until > Date.now()) return response.status(409).json({ error: "Another connection request is pending. Try again shortly." })
+    pairRequest = { id: token(), secret: token(), address: request.socket.remoteAddress, until: Date.now() + 120000, approved: false }
+    response.json({ id: pairRequest.id, secret: pairRequest.secret })
+  })
+  web.post("/api/pair-request/status", (request, response) => {
+    if (!pairRequest || pairRequest.until < Date.now() || request.body.id !== pairRequest.id || request.body.secret !== pairRequest.secret) return response.status(410).json({ error: "Connection request expired. Try again." })
+    if (!pairRequest.approved) return response.json({ waiting: true })
+    const credential = pairRequest.credential; pairRequest = undefined
+    response.json({ token: credential })
+  })
 
   web.post("/api/pair", async (request, response) => {
     const supplied = String(request.body?.code ?? "").toUpperCase().trim()
@@ -94,6 +109,15 @@ async function start(port = 0, recoveryDirectory) {
     const addresses = interfaces.filter(item => item && item.family === "IPv4" && !item.internal)
       .map(item => "http://" + item.address + ":" + server.address().port)
     response.json({ code: pairing.code, addresses })
+  })
+  web.post("/api/pair-request/approve", async (request, response) => {
+    if (request.role !== "pc") return response.sendStatus(403)
+    if (!pairRequest || pairRequest.until < Date.now() || pairRequest.id !== request.body.id) return response.status(410).json({ error: "Connection request expired." })
+    if (!request.body.approve) { pairRequest = undefined; return response.sendStatus(204) }
+    mobile = token(); mobileUntil = Date.now() + 30 * 86400000
+    if (recoveryDirectory) { await fs.mkdir(recoveryDirectory, {recursive:true}); await fs.writeFile(path.join(recoveryDirectory,"paired-device.json"), JSON.stringify({token:mobile,until:mobileUntil})) }
+    pairRequest.credential = mobile; pairRequest.approved = true
+    response.sendStatus(204)
   })
   web.get("/api/library", (request, response) => response.json(library.list()))
   web.get("/api/storage", (request, response) => response.json({ ...library.stats(), recoveryWarning }))
@@ -133,6 +157,7 @@ async function start(port = 0, recoveryDirectory) {
   })
   web.delete("/api/pairing", async (request, response) => {
     if (request.role !== "pc") return response.sendStatus(403)
+    pairRequest = undefined
     pairing = undefined
     mobile = undefined
     if (recoveryDirectory) await fs.unlink(path.join(recoveryDirectory, "paired-device.json")).catch(error => { if (error.code !== "ENOENT") throw error })
@@ -142,6 +167,7 @@ async function start(port = 0, recoveryDirectory) {
     const unchanged = Number(request.query.revision) === revision
     response.json({
       revision, role: request.role, paired: Boolean(mobile) && mobileUntil > Date.now(), phoneOnline: Date.now() - lastPhoneSeen < 6000, recoveryWarning, handoff: handoff?.target === request.role ? handoff : null,
+      pairRequest: request.role === "pc" && pairRequest && !pairRequest.approved && pairRequest.until > Date.now() ? { id: pairRequest.id, address: pairRequest.address } : null,
       tabs: [...documents.values()].map(item => ({ id: item.libraryId, documentId: item.id, filename: item.filename, dirty: item.changeNumber !== item.savedNumber })),
       preview: previews[request.role === "pc" ? "phone" : "pc"]?.until > Date.now()
         ? previews[request.role === "pc" ? "phone" : "pc"].mark : null,
@@ -449,6 +475,18 @@ async function start(port = 0, recoveryDirectory) {
     response.set("X-Elleson-Revision", String(result.changeNumber))
     response.attachment(result.filename).type(downloadMime[result.extension]).send(Buffer.from(result.bytes))
   })
+  web.post("/api/protect/:id", async (request, response) => {
+    try {
+      const exported = await exportFile(request.params.id)
+      if (exported.extension !== "pdf") throw new Error("Open a PDF to set its password.")
+      const { protectPdf } = await import("./pdf-protection.mjs")
+      response.type("application/pdf").send(Buffer.from(protectPdf(exported.bytes, request.body.password)))
+    } catch (error) { response.status(400).json({ error: error.message }) }
+  })
+  web.post("/api/rename/:id", async (request, response) => {
+    try { await renameDocument(request.params.id, request.body.name); response.json(snapshot(document)) }
+    catch (error) { response.status(400).json({ error: error.message }) }
+  })
   web.post("/api/saved/:receipt", async (request, response) => {
     const entry = pendingExports.get(request.params.receipt)
     if (!entry || entry.expires < Date.now()) return response.status(410).json({ error: "Save confirmation expired. The downloaded copy is still available." })
@@ -466,6 +504,7 @@ async function start(port = 0, recoveryDirectory) {
     const listener = web.listen(port, "0.0.0.0", () => resolve(listener))
     listener.once("error", reject)
   })
+  if (recoveryDirectory) require("./discovery.cjs").advertise(server)
   if (recoveryDirectory) {
     try {
       let workspace
@@ -631,7 +670,12 @@ async function start(port = 0, recoveryDirectory) {
     return { filename: stem + (options.flatten ? " - final." : " - copy.") + extension, bytes, extension, changeNumber }
   }
 
-  return { server, owner, address: "http://127.0.0.1:" + server.address().port, maxBytes, open, exportFile, markSaved,
+  async function renameDocument(id, name) {
+    const current = [...documents.values()].find(item => item.id === id)
+    if (!current || typeof name !== "string" || !name.trim() || name.length > 180 || /[\\/:*?"<>|\u0000-\u001f]/.test(name) || path.extname(name).toLowerCase() !== "." + current.extension) throw new Error("Use a valid filename and keep its current extension.")
+    current.filename = name.trim(); revision++; await checkpoint()
+  }
+  return { server, owner, address: "http://127.0.0.1:" + server.address().port, maxBytes, open, exportFile, markSaved, renameDocument,
     getDocument: () => document ? snapshot(document) : null }
 }
 

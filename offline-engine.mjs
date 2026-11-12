@@ -1,4 +1,5 @@
 import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib"
+import { protectPdf } from "./pdf-protection.mjs"
 import { unzipSync, zipSync, strFromU8, strToU8 } from "fflate"
 import { extract, replace, organize, scanImage, imageInfo } from "./pdf-edit.mjs"
 import { applyFormatting, ensureListParts, insertTable, insertImage, validFormat } from "./word-format.mjs"
@@ -257,6 +258,11 @@ export async function install() {
       return new Response(null, { status: 204 })
     }
     if (!file || parts[2] !== file.id) return Response.json({ error: "The open document changed." }, { status: 409 })
+    if (action === "rename") {
+      const name = body.name
+      if (typeof name !== "string" || !name.trim() || name.length > 180 || /[\\/:*?"<>|\u0000-\u001f]/.test(name) || !name.toLowerCase().endsWith("." + file.extension)) throw new Error("Use a valid filename and keep its current extension.")
+      file.filename = name.trim(); revision++; await persist(); return Response.json(snapshot())
+    }
     if (action === "review") return Response.json(reviewList(file.bytes, Number(parts[3]) - 1))
     if (action === "pdf-images") return Response.json(images(file.bytes, Number(parts[3]) - 1))
     if (action === "pdf-image") {
@@ -325,6 +331,10 @@ export async function install() {
       return new Response(bytes, { headers: { "Content-Type": file.extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "X-Elleson-Revision": String(file.changeNumber),
         "Content-Disposition": "attachment; filename*=UTF-8''" + encodeURIComponent(file.filename) } })
+    }
+    if (action === "protect") {
+      if (file.extension !== "pdf") throw new Error("Open a PDF to set its password.")
+      return new Response(protectPdf(await exported(false), body.password), { headers: { "Content-Type": "application/pdf" } })
     }
     if (action === "ocr") {
       const language = body.lang || "eng"

@@ -5,3 +5,4 @@ dist/
 *.p12
 web/offline-runtime.mjs
 web/scan-runtime.mjs
+web/conversion-runtime.mjs

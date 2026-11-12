@@ -1,5 +1,7 @@
 # Elleson Docs
 
+The current source is **0.4.0-preview.1**. See [UPDATE-STATUS.md](UPDATE-STATUS.md) for added features, verification, and remaining work. This preview adds conversion, scanner adjustments, a Done drawing button, continuous reading, new documents, naming/saving tools, password-protected copies, phone discovery and PC-approved pairing. The 0.3.0 description below remains the baseline; it is not a claim that every preview feature is complete.
+
 Elleson Docs 0.3.0 is a Windows and Android document viewer and editor. It supports independent phone use and live two-way editing over local Wi-Fi. Each device keeps its own page and zoom. The current shared tab is visible on both devices, while other tabs retain their own unsaved work.
 
 ## Documents and editing

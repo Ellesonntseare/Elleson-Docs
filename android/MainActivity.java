@@ -70,7 +70,11 @@ public final class MainActivity extends Activity {
         setContentView(root);
         incomingDocument = documentFromIntent(getIntent());
         if (incomingDocument != null) loadViewer(LOCAL_ORIGIN);
-        else showConnection();
+        else {
+            String remembered = getPreferences(MODE_PRIVATE).getString("address", "");
+            if (!remembered.isEmpty()) loadViewer(remembered);
+            else showConnection();
+        }
     }
 
     private Uri documentFromIntent(Intent intent) {
@@ -144,10 +148,15 @@ public final class MainActivity extends Activity {
         local.setOnClickListener(view -> loadViewer(LOCAL_ORIGIN));
         content.addView(local);
         TextView help = new TextView(this);
-        help.setText("On the PC, choose Connect phone. Enter the address shown there. Both devices need to be on the same Wi-Fi.");
+        help.setText("PCs on your Wi-Fi appear below. Connect once using the code on your PC; this phone remembers the connection next time. You can also enter an address manually.");
         help.setTextSize(16);
         help.setPadding(0, dp(12), 0, dp(16));
         content.addView(help);
+        LinearLayout discovered = new LinearLayout(this);
+        discovered.setOrientation(LinearLayout.VERTICAL);
+        content.addView(discovered);
+        Button search = new Button(this); search.setText("Find PCs on Wi-Fi"); content.addView(search);
+        search.setOnClickListener(view -> discoverPCs(discovered, search));
         EditText address = new EditText(this);
         address.setHint("PC address");
         address.setContentDescription("PC address");
@@ -175,6 +184,40 @@ public final class MainActivity extends Activity {
         });
         content.addView(connect);
         root.addView(content);
+        discoverPCs(discovered, search);
+    }
+
+    private void discoverPCs(LinearLayout list, Button search) {
+        list.removeAllViews(); search.setEnabled(false); search.setText("Looking for PCs…");
+        new Thread(() -> {
+            java.util.HashSet<String> found = new java.util.HashSet<>();
+            try (java.net.DatagramSocket socket = new java.net.DatagramSocket()) {
+                socket.setBroadcast(true); socket.setSoTimeout(1000);
+                byte[] query = "ELLESON_DOCS_DISCOVER_V1".getBytes(StandardCharsets.UTF_8);
+                for (int attempt = 0; attempt < 3; attempt++) {
+                    socket.send(new java.net.DatagramPacket(query, query.length, java.net.InetAddress.getByName("255.255.255.255"), 16944));
+                    long until = System.currentTimeMillis() + 1200;
+                    while (System.currentTimeMillis() < until) {
+                        try {
+                            java.net.DatagramPacket packet = new java.net.DatagramPacket(new byte[1024], 1024); socket.receive(packet);
+                            org.json.JSONObject data = new org.json.JSONObject(new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8));
+                            String ip = packet.getAddress().getHostAddress(); int port = data.optInt("port");
+                            if (!"elleson-docs".equals(data.optString("service")) || !localAddress(ip) || port < 1 || port > 65535) continue;
+                            String address = "http://" + ip + ":" + port;
+                            if (!found.add(address)) continue;
+                            String name = data.optString("name", "PC");
+                            runOnUiThread(() -> {
+                                if (!list.isAttachedToWindow()) return;
+                                Button pc = new Button(this); pc.setText("Connect to " + name);
+                                pc.setOnClickListener(view -> { getPreferences(MODE_PRIVATE).edit().putString("address", address).apply(); loadViewer(address); });
+                                list.addView(pc);
+                            });
+                        } catch (java.net.SocketTimeoutException ignored) { }
+                    }
+                }
+            } catch (Exception ignored) { }
+            runOnUiThread(() -> { search.setEnabled(true); search.setText("Find PCs on Wi-Fi"); if (found.isEmpty() && list.isAttachedToWindow()) { TextView empty = new TextView(this); empty.setText("No PC found. Open Elleson Docs on the PC, check Wi-Fi, or use its address below."); list.addView(empty); } });
+        }, "elleson-discovery").start();
     }
 
     private static boolean localAddress(String host) {
@@ -252,7 +295,9 @@ public final class MainActivity extends Activity {
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
                 intent.setType(image ? "image/*" : "*/*");
-                if (!image) intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
+                boolean multiple = params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE;
+                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple);
+                if (!image && !multiple) intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
                     "application/pdf", "application/msword",
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 });
@@ -360,8 +405,9 @@ public final class MainActivity extends Activity {
                     saveUrl = "local";
                     Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
                     intent.addCategory(Intent.CATEGORY_OPENABLE);
-                    intent.setType(name.toLowerCase(java.util.Locale.ROOT).endsWith(".zip") ? "application/zip" : name.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf") ? "application/pdf"
-                            : "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+                    String extension = name.substring(name.lastIndexOf('.') + 1).toLowerCase(java.util.Locale.ROOT);
+                    String mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension);
+                    intent.setType(mime == null ? "application/octet-stream" : mime);
                     intent.putExtra(Intent.EXTRA_TITLE, name);
                     startActivityForResult(intent, SAVE_FILE);
                 } catch (Exception error) {
@@ -370,6 +416,24 @@ public final class MainActivity extends Activity {
                     Toast.makeText(MainActivity.this, "Could not prepare the file.", Toast.LENGTH_LONG).show();
                 }
             });
+        }
+        @JavascriptInterface public void shareData(String data, String name, String mime) {
+            if (data.length() > 80000000) return;
+            new Thread(() -> {
+                try {
+                    String safe = name.replaceAll("[^A-Za-z0-9_. -]", "_"); if (safe.length() > 180) safe = safe.substring(safe.length() - 180);
+                    String relative = "shared/" + java.util.UUID.randomUUID().toString() + "/" + safe;
+                    java.io.File file = new java.io.File(getCacheDir(), relative); file.getParentFile().mkdirs();
+                    try (OutputStream output = new java.io.FileOutputStream(file)) { output.write(Base64.decode(data, Base64.DEFAULT)); }
+                    Uri uri = Uri.parse("content://za.co.elleson.docs.camera/" + relative);
+                    runOnUiThread(() -> {
+                        Intent send = new Intent(Intent.ACTION_SEND); send.setType(getContentResolver().getType(uri));
+                        send.putExtra(Intent.EXTRA_STREAM, uri); send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        send.setClipData(android.content.ClipData.newRawUri("Document", uri));
+                        try { startActivity(Intent.createChooser(send, "Share document")); } catch (Exception error) { Toast.makeText(MainActivity.this, "No sharing app is available.", Toast.LENGTH_LONG).show(); }
+                    });
+                } catch (Exception error) { runOnUiThread(() -> Toast.makeText(MainActivity.this, "Could not prepare sharing.", Toast.LENGTH_LONG).show()); }
+            }, "elleson-share").start();
         }
         @JavascriptInterface public void save(String url, String token, String name) {
             runOnUiThread(() -> {
@@ -404,6 +468,10 @@ public final class MainActivity extends Activity {
                 try { getContentResolver().takePersistableUriPermission(selected, data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION)); } catch (Exception ignored) {}
             }
             Uri[] selection = selected == null ? null : new Uri[] { selected };
+            if (result == RESULT_OK && data != null && data.getClipData() != null) {
+                android.content.ClipData clips = data.getClipData(); selection = new Uri[clips.getItemCount()];
+                for (int i = 0; i < selection.length; i++) selection[i] = clips.getItemAt(i).getUri();
+            }
             cameraUri = null;
             fileCallback.onReceiveValue(selection);
             fileCallback = null;

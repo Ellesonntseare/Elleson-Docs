@@ -42,6 +42,7 @@ async function verify() {
     await window.getByRole("textbox", { name: "Name", exact: true }).fill("Saved back to original")
     await window.getByRole("textbox", { name: "Name", exact: true }).blur()
     await window.getByText("Change synced", { exact: true }).waitFor()
+    if (!(await window.locator("#save-original").isVisible())) await window.locator("#more-actions").click()
     await window.getByRole("button", { name: "Save", exact: true }).click()
     await window.waitForFunction(() => document.querySelector("#status").textContent.startsWith("Saved to "))
     assert.equal((await PDFDocument.load(await fs.readFile(exported))).getForm().getTextField("Name").getText(), "Saved back to original")

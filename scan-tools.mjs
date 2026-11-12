@@ -1,4 +1,5 @@
 import { PDFDocument } from "pdf-lib"
+import { applyScanFilter } from "./scan-filters.mjs"
 export const defaultCorners = () => [[0, 0], [1, 0], [1, 1], [0, 1]]
 function valid(points) {
   return Array.isArray(points) && points.length === 4 && points.every(point => Array.isArray(point) && point.length === 2 && point.every(value => Number.isFinite(value) && value >= 0 && value <= 1)) && points.every((a, index) => { const b = points[(index + 1) % 4], c = points[(index + 2) % 4]; return (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]) > .0001 })
@@ -51,17 +52,7 @@ export async function prepareImage(file, options = {}) {
       for (let channel = 0; channel < 3; channel++) output.data[to + channel] = source[from + channel]
       output.data[to + 3] = 255
     }
-    if (options.filter && options.filter !== "photo") {
-      const integral = new Float64Array((width + 1) * (height + 1)), stride = width + 1
-      for (let y = 0; y < height; y++) { let sum = 0; for (let x = 0; x < width; x++) { const offset = (y * width + x) * 4; sum += output.data[offset] * .299 + output.data[offset + 1] * .587 + output.data[offset + 2] * .114; integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + sum } }
-      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-        const left = Math.max(0, x - 20), right = Math.min(width, x + 21), top = Math.max(0, y - 20), bottom = Math.min(height, y + 21)
-        const mean = (integral[bottom * stride + right] - integral[top * stride + right] - integral[bottom * stride + left] + integral[top * stride + left]) / ((right - left) * (bottom - top))
-        const offset = (y * width + x) * 4, light = output.data[offset] * .299 + output.data[offset + 1] * .587 + output.data[offset + 2] * .114
-        const value = options.filter === "receipt" ? light < mean - 14 ? 0 : 255 : Math.max(0, Math.min(255, light * 255 / Math.max(60, mean)))
-        output.data[offset] = output.data[offset + 1] = output.data[offset + 2] = value
-      }
-    }
+    applyScanFilter(output.data, width, height, options)
     context.putImageData(output, 0, 0)
     const rad = Math.max(-15, Math.min(15, Number(options.angle) || 0)) * Math.PI / 180, rotated = document.createElement("canvas")
     rotated.width = Math.ceil(Math.abs(width * Math.cos(rad)) + Math.abs(height * Math.sin(rad))); rotated.height = Math.ceil(Math.abs(height * Math.cos(rad)) + Math.abs(width * Math.sin(rad)))

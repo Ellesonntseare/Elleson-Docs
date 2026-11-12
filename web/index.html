@@ -18,6 +18,7 @@
     <span id="recovery-warning" role="alert" hidden></span>
     <div class="actions">
       <button id="open" hidden>Open file</button>
+      <button id="new-document">New</button>
       <button id="library" hidden>Files</button>
       <button id="connect" hidden>Connect phone</button>
       <button id="find" hidden>Find</button>
@@ -31,6 +32,9 @@
       </div>
       <button id="save" class="primary" disabled>Save copy</button>
       <button id="save-original" disabled>Save</button>
+      <button id="save-as">Save As…</button>
+      <button id="share-as">Share As…</button>
+      <button id="rename-document">Rename</button>
       <button id="print" disabled>Print</button>
     </div>
     <input id="file" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
@@ -49,6 +53,7 @@
       <select id="ocr-language" aria-label="Text recognition language"><option value="eng">English</option><option value="fra">French</option><option value="spa">Spanish</option></select>
       <button data-mode="text" aria-pressed="false">Add text</button>
       <button data-mode="pen" aria-pressed="false">Draw</button>
+      <button id="drawing-done" class="primary" hidden aria-label="Done drawing">✓ Done</button>
       <button data-mode="highlight" aria-pressed="false">Highlight</button>
       <button data-mode="erase" aria-pressed="false">Erase mark</button>
       <button data-mode="select" aria-pressed="false">Select added content</button>
@@ -56,6 +61,7 @@
       <button id="review">Comments &amp; review</button>
       <button id="signature">Signature</button>
       <button id="organize">Organize pages</button>
+      <button id="protect-pdf">Set PDF password</button>
       <label class="ink-setting">Ink <input id="ink-color" type="color" value="#093352" aria-label="Ink color"></label>
       <label class="ink-setting">Width <select id="ink-width"><option value="1">Fine</option><option value="2" selected>Medium</option><option value="4">Thick</option><option value="8">Wide</option></select></label>
       <button id="undo" disabled>Undo mark</button>
@@ -93,7 +99,9 @@
       <section id="pair-form" class="welcome" hidden>
         <img src="/logo.png" alt="">
         <h1>Connect to your PC</h1>
-        <p>Choose Connect phone on your PC, then enter the pairing code.</p>
+        <p>Request a connection and approve it on your PC. Your phone will reconnect automatically next time.</p>
+        <button id="request-pair" class="primary">Connect to this PC</button><p id="pair-request-status" role="status"></p>
+        <p>Or enter a pairing code from the PC:</p>
         <form id="pair" class="pair-form">
           <label>Pairing code <input id="code" required minlength="8" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
           <button class="primary">Connect</button>
@@ -189,6 +197,7 @@
   <dialog id="pages-dialog">
     <h2>Organize pages</h2>
     <p id="pages-current"></p>
+    <div id="page-organizer" class="page-organizer"></div>
     <div class="actions"><button id="rotate-page">Rotate page</button><button id="delete-page">Delete page</button></div>
     <label>Page order or selection, separated by commas <input id="page-order" placeholder="1, 2, 3"></label>
     <div class="actions"><button id="reorder-pages">Apply page order</button><button id="extract-pages">Extract selected pages</button></div>
@@ -197,13 +206,42 @@
     <input id="combine-file" type="file" accept=".pdf,application/pdf" hidden>
     <form method="dialog"><button>Close</button></form>
   </dialog>
+  <dialog id="protect-dialog">
+    <h2>Save a password-protected PDF copy</h2>
+    <p>The original stays unchanged. You will need this password to open the protected copy. Elleson Docs cannot recover it.</p>
+    <form id="protect-form">
+      <label>Password <input id="protect-password" type="password" minlength="8" required autocomplete="new-password"></label>
+      <label>Confirm password <input id="protect-confirm" type="password" minlength="8" required autocomplete="new-password"></label>
+      <p id="protect-error" role="alert"></p>
+      <button type="submit" class="primary">Save protected copy</button>
+      <button id="protect-cancel" type="button">Cancel</button>
+    </form>
+  </dialog>
+  <dialog id="new-dialog"><h2>New document</h2>
+    <form id="new-form">
+      <label>Name <input id="new-name" required maxlength="150" value="Untitled"></label>
+      <label>Type <select id="new-type"><option value="docx">Word document</option><option value="pdf">PDF</option></select></label>
+      <label>Starting text <textarea id="new-text" rows="6" placeholder="Start writing, or leave this blank."></textarea></label>
+      <button class="primary">Create document</button><button type="button" id="new-cancel">Cancel</button>
+    </form>
+  </dialog>
+  <dialog id="rename-dialog"><h2>Rename document</h2><p id="rename-help"></p>
+    <form id="rename-form"><label>Filename <input id="rename-name" required maxlength="180"></label>
+    <p id="rename-error" role="alert"></p><button class="primary">Rename</button><button id="rename-cancel" type="button">Cancel</button></form>
+  </dialog>
+  <dialog id="approve-phone-dialog"><h2>Connect this phone?</h2><p id="approve-phone-address"></p><p>Allow this device to view and edit the documents in this session. Approve only if you requested this connection.</p><button id="approve-phone" class="primary">Connect phone</button><button id="reject-phone">Decline</button></dialog>
   <dialog id="scan-dialog">
     <h2>Prepare scan</h2>
     <img id="scan-preview" alt="Document photo">
     <div id="scan-pages" class="actions"></div>
     <button id="scan-add">Add another page</button>
     <button id="scan-auto">Detect page edges</button>
-    <label>Image mode <select id="scan-filter" aria-label="Image mode"><option value="document">Document</option><option value="receipt">Receipt</option><option value="photo">Photo</option></select></label>
+    <label>Image mode <select id="scan-filter" aria-label="Image mode"><option value="photo">Original</option><option value="auto">Auto Enhance</option><option value="colour">Colour Document</option><option value="bw">Black &amp; White</option><option value="grayscale">Grayscale</option><option value="receipt">Receipt</option><option value="clean">Clean Paper</option><option value="document">Document (grayscale cleanup)</option></select></label>
+    <label>Brightness <input id="scan-brightness" type="range" min="-100" max="100" value="0"></label>
+    <label>Contrast <input id="scan-contrast" type="range" min="-80" max="100" value="0"></label>
+    <label>Sharpness <input id="scan-sharpness" type="range" min="0" max="100" value="0"></label>
+    <label>Background whitening <input id="scan-whitening" type="range" min="0" max="100" value="0"></label>
+    <div class="actions"><button id="scan-apply-all">Apply filter to all pages</button><button id="scan-reset">Reset to original</button></div>
     <p>Adjust the four page corners for cropping and perspective correction.</p>
     <div id="scan-corners" class="corner-controls"></div>
     <label>Straighten <input id="scan-angle" type="range" min="-15" max="15" value="0" step="0.5"><output id="scan-angle-value">0°</output></label>
