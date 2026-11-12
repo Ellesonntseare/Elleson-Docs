@@ -79,7 +79,9 @@ test("paired editors exchange real PDF and DOCX changes and export from either c
     return state.document.id
   }, host.owner)
   for (const client of [pc, phone]) {
-    const downloadPromise = client.waitForEvent("download")
+    const downloadPromise = client.waitForEvent("download").catch(async error => {
+      throw new Error(await client.locator("#status").textContent(), { cause: error })
+    })
     await client.getByRole("button", { name: "Save copy" }).click()
     const download = await downloadPromise
     const reopened = await PDFDocument.load(await require("node:fs/promises").readFile(await download.path()))
@@ -132,7 +134,9 @@ test("paired editors exchange real PDF and DOCX changes and export from either c
   await phoneParagraph.blur()
   await pc.getByText("Word text from the phone", { exact: true }).waitFor()
   for (const client of [pc, phone]) {
-    const downloadPromise = client.waitForEvent("download")
+    const downloadPromise = client.waitForEvent("download").catch(async error => {
+      throw new Error("Save status: " + await client.locator("#status").textContent(), { cause: error })
+    })
     await client.getByRole("button", { name: "Save copy" }).click()
     const download = await downloadPromise
     const reopened = await readWord(await require("node:fs/promises").readFile(await download.path()), "docx")

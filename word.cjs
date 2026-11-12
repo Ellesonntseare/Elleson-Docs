@@ -44,8 +44,12 @@ async function saveWord(source, edits) {
     const children = source.lines.map((line, index) => new Paragraph(edits[index] ?? line.text))
     return Packer.toBuffer(new Document({ sections: [{ children }] }))
   }
+  const cloned = source.document.cloneNode(true)
+  const originalNodes = Array.from(source.document.getElementsByTagName("*")).filter(node => node.localName === "t")
+  const clonedNodes = Array.from(cloned.getElementsByTagName("*")).filter(node => node.localName === "t")
+  const nodeMap = new Map(originalNodes.map((node, index) => [node, clonedNodes[index]]))
   for (const [index, text] of Object.entries(edits)) {
-    const nodes = source.runs[index]
+    const nodes = source.runs[index].map(node => nodeMap.get(node))
     const ownership = nodes.flatMap((node, owner) => Array.from(node.textContent, () => owner))
     const replacement = nodes.map(() => "")
     const previous = nodes.map(node => node.textContent).join("")
@@ -65,7 +69,7 @@ async function saveWord(source, edits) {
       nodes[run].setAttributeNS(xmlNamespace, "xml:space", "preserve")
     }
   }
-  const xml = new XMLSerializer().serializeToString(source.document)
+  const xml = new XMLSerializer().serializeToString(cloned)
   return zipSync({ ...source.archive, [documentPart]: strToU8(xml) }, { level: 3 })
 }
 

@@ -18,6 +18,11 @@
       <button id="open" hidden>Open file</button>
       <button id="connect" hidden>Connect phone</button>
       <button id="find" hidden>Find</button>
+      <button id="more-actions" aria-expanded="false" aria-controls="history-actions">More</button>
+      <div id="history-actions" class="actions">
+        <button id="history-undo" disabled>Undo</button>
+        <button id="history-redo" disabled>Redo</button>
+      </div>
       <button id="save" class="primary" disabled>Save copy</button>
     </div>
     <input id="file" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
@@ -36,6 +41,7 @@
       <button data-mode="word" aria-pressed="false">Edit text</button>
     </div>
     <div class="actions page-tools" id="page-tools">
+      <button id="sidebar-toggle" aria-expanded="true" aria-controls="pages">Pages</button>
       <button id="prev" aria-label="Previous page">‹</button>
       <label class="page-index"><input id="page" type="number" aria-label="Page number" min="1" value="1"> <span id="total"></span></label>
       <button id="next" aria-label="Next page">›</button>

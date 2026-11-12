@@ -1,4 +1,4 @@
-ELLESON DOCS 0.1.0
+ELLESON DOCS 0.1.1
 
 WINDOWS
 
@@ -51,7 +51,9 @@ Scanned text uses an estimated font and should be checked visually.
 Text recognition is currently English.
 Encrypted PDFs and complex form types need further handling.
 Undo mark removes the most recent added text or ink mark on the current page.
-Original-text replacements have no undo control in this build.
+Undo and Redo in the header cover document changes in the current session.
+Undo history holds up to 50 changes, subject to its memory limit.
+Opening another document or restarting clears undo history.
 
 VERIFICATION
 

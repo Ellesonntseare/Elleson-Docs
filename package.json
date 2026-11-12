@@ -1,6 +1,6 @@
 {
   "name": "elleson-docs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Windows document viewer and paired Android editor",
   "main": "main.cjs",
   "scripts": {

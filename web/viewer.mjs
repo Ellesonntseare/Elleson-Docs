@@ -32,6 +32,7 @@ let searchSource
 let thumbnailObserver
 let remoteDraft
 let previewAt = 0
+let sidebarOpen = matchMedia("(min-width: 601px)").matches
 
 function status(message) { $.status.textContent = message }
 function fail(error) { status(error.message || String(error)) }
@@ -55,6 +56,8 @@ const postJson = (url, body) => request(url, {
 })
 
 function layout() {
+  $["history-undo"].disabled = !current?.canUndo
+  $["history-redo"].disabled = !current?.canRedo
   const connected = Boolean(credential)
   const hasPdf = current?.extension === "pdf"
   $.open.hidden = !connected
@@ -67,7 +70,8 @@ function layout() {
   $["pdf-tools"].hidden = !hasPdf
   $["word-tools"].hidden = !current || hasPdf
   $["page-tools"].hidden = !hasPdf
-  $.pages.hidden = !hasPdf
+  $.pages.hidden = !hasPdf || !sidebarOpen
+  $["sidebar-toggle"].setAttribute("aria-expanded", sidebarOpen)
   $["pdf-sheet"].hidden = !hasPdf
   $["word-sheet"].hidden = !current || hasPdf
   $["file-title"].textContent = current?.filename || ""
@@ -149,6 +153,7 @@ function edit(change) {
       if (current?.id === id) {
         const before = current.contentVersion
         current = updated
+        layout()
         revision = -1
         if (current.extension === "pdf") {
           if (before !== current.contentVersion) await loadPdf(id)
@@ -549,9 +554,17 @@ $.page.addEventListener("change", () => go(Number($.page.value)))
 byId("zoom-in").addEventListener("click", () => { zoom = Math.min(3, zoom * 1.25); void renderPage() })
 byId("zoom-out").addEventListener("click", () => { zoom = Math.max(.35, zoom / 1.25); void renderPage() })
 $.fit.addEventListener("click", () => { zoom = 1; void renderPage() })
+$["sidebar-toggle"].addEventListener("click", () => {
+  sidebarOpen = !sidebarOpen
+  layout()
+})
 $.find.addEventListener("click", () => {
   $["search-dialog"].showModal()
   $.search.focus()
+})
+$["more-actions"].addEventListener("click", () => {
+  const opened = document.querySelector(".app-header").classList.toggle("history-open")
+  $["more-actions"].setAttribute("aria-expanded", opened)
 })
 document.addEventListener("keydown", event => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f" && current) {
@@ -594,6 +607,14 @@ $.undo.addEventListener("click", () => {
   const last = current?.marks.findLast(mark => mark.page === page)
   if (last) void edit({ kind: "undo", target: last.id })
 })
+for (const direction of ["undo", "redo"]) {
+  byId("history-" + direction).addEventListener("click", async () => {
+    document.activeElement?.blur()
+    await pendingEdit
+    await edit({ kind: "history-" + direction })
+    if (current?.extension !== "pdf") void renderWord()
+  })
+}
 $.recognize.addEventListener("click", async () => {
   if (!current || !pdf) return
   $.recognize.disabled = true

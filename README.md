@@ -1,6 +1,6 @@
 # Elleson Docs
 
-Elleson Docs 0.1.0 is an initial Windows document viewer and editor with a paired Android companion.
+Elleson Docs 0.1.1 is an initial Windows document viewer and editor with a paired Android companion.
 
 Open a PDF, scanned PDF, DOC, or DOCX on the PC. Pair the phone over the same local Wi-Fi using the PC address and a temporary code. Either device can open a new file, fill supported PDF fields, add text, draw, edit supported existing PDF text, edit Word paragraphs, and save a copy. Page selection and zoom belong to each device independently.
 
@@ -21,7 +21,7 @@ This build handles one shared document at a time, with an upload limit of 40 MB.
 
 Word editing currently changes paragraph text. Advanced Word formatting, tracked changes, and fully faithful rendering of every Office feature need further implementation. PDF editing is limited to horizontal text. Unavailable characters, text with a rotated baseline, encrypted documents, complex PDF form types, and some unusual font encodings need further handling. OCR recognition and scan font estimation require visual review.
 
-PDF annotation undo removes the latest added text or ink mark from the displayed page. It does not undo an original-text replacement. Session recovery retains the latest edited document, and Save copy creates a separate document file.
+Shared Undo and Redo restore PDF text replacements, form fields, handwriting, annotations and Word paragraph changes during the current session. The history holds up to 50 changes with a memory limit. Opening another document or restarting clears undo history. Session recovery retains the latest edited document, and Save copy creates a separate document file.
 
 The APK has been compiled, signed and structurally verified. Browser tests cover desktop and a mobile viewport. Physical Android installation, handwriting latency, native file-picking and saving, and real phone-to-PC networking require device validation.
 

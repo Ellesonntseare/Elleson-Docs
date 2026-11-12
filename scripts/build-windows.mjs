@@ -1,15 +1,16 @@
 import { packager } from "@electron/packager"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { copyFile } from "node:fs/promises"
+import { copyFile, readFile } from "node:fs/promises"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
+const { version } = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"))
 const applications = await packager({
   dir: root, name: "Elleson Docs", platform: "win32", arch: "x64",
   out: path.join(root, "dist"), overwrite: true, asar: false,
   electronVersion: "45.3.0", electronZipDir: process.env.ELLESON_ELECTRON_ZIP_DIR,
   icon: path.join(root, "web", "logo.ico"),
-  appVersion: "0.1.0", buildVersion: "0.1.0",
+  appVersion: version, buildVersion: version,
   win32metadata: { CompanyName: "Elleson", ProductName: "Elleson Docs", FileDescription: "Elleson Docs document viewer" },
   ignore: [/^\/(\.git|\.build|dist|test|android|scripts)(\/|$)/],
   prune: true

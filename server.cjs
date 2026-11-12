@@ -2,6 +2,7 @@ const crypto = require("node:crypto")
 const os = require("node:os")
 const path = require("node:path")
 const fs = require("node:fs/promises")
+const history = require("./history.cjs")
 const express = require("express")
 const { PDFDocument, PDFTextField, PDFCheckBox, PDFDropdown, degrees, rgb, StandardFonts } = require("pdf-lib")
 const { readWord, saveWord } = require("./word.cjs")
@@ -26,6 +27,7 @@ async function start(port = 0, recoveryDirectory) {
   let recognizing = false
   let checkpointQueue = Promise.resolve()
   let previousSource
+  let editQueue = Promise.resolve()
   const previews = Object.create(null)
   const isLoopback = request => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(request.socket.remoteAddress)
 
@@ -138,14 +140,22 @@ async function start(port = 0, recoveryDirectory) {
     await open(decodeURIComponent(request.get("x-filename") || ""), request.body)
     response.sendStatus(204)
   })
-  web.post("/api/edit/:id", async (request, response) => {
+  web.post("/api/edit/:id", (request, response, next) => {
+    const operation = editQueue.then(() => applyEdit(request, response))
+    editQueue = operation.catch(() => {})
+    operation.catch(next)
+  })
+  async function applyEdit(request, response) {
     const current = document
     if (!current || current.id !== request.params.id) return response.status(409).json({ error: "The open document changed." })
     const edit = request.body
     if (!edit || !/^[a-zA-Z0-9-]{12,80}$/.test(edit.id ?? "")) return response.sendStatus(400)
     if (current.applied.has(edit.id)) return response.json(snapshot(current))
     if (current.applied.size >= 30000) throw new Error("Save a copy and reopen it to continue editing.")
-    if (edit.kind === "replace" && current.extension === "pdf" && edit.version === current.contentVersion
+    const before = history.capture(current)
+    if (edit.kind === "history-undo" || edit.kind === "history-redo") {
+      history.restore(current, edit.kind === "history-undo" ? "undo" : "redo")
+    } else if (edit.kind === "replace" && current.extension === "pdf" && edit.version === current.contentVersion
       && Number.isInteger(edit.page) && edit.page >= 1 && edit.page <= current.pages && (Number.isInteger(edit.span) || /^ocr-\d+$/.test(edit.span))
       && typeof edit.before === "string" && typeof edit.value === "string" && edit.value.length <= 2000) {
       const version = current.contentVersion
@@ -175,11 +185,12 @@ async function start(port = 0, recoveryDirectory) {
         current.marks.push({ id: edit.id, page: edit.page, kind: "text", at: edit.at, angle: edit.angle, size: edit.size, value: edit.value })
       } else return response.status(400).json({ error: "This change could not be applied." })
     } else return response.status(400).json({ error: "This change could not be applied." })
+    if (edit.kind !== "history-undo" && edit.kind !== "history-redo") history.remember(current, before)
     current.applied.add(edit.id)
     revision++
     await checkpoint()
     response.json(snapshot(current))
-  })
+  }
   web.get("/api/save/:id", async (request, response) => {
     const result = await exportFile(request.params.id)
     response.attachment(result.filename).type(downloadMime[result.extension]).send(Buffer.from(result.bytes))
@@ -241,6 +252,7 @@ async function start(port = 0, recoveryDirectory) {
       id: current.id, filename: current.filename, extension: current.extension, pages: current.pages, contentVersion: current.contentVersion,
       saveExtension: current.extension === "doc" && Object.keys(current.wordEdits).length ? "docx" : current.extension,
       marks: current.marks, fields: current.fields,
+      canUndo: current.undo.length > 0, canRedo: current.redo.length > 0,
       lines: current.word?.lines.map((line, index) => ({ ...line, text: current.wordEdits[index] ?? line.text }))
     }
   }
@@ -252,7 +264,7 @@ async function start(port = 0, recoveryDirectory) {
     if (!downloadMime[extension] || bytes.length > maxBytes) throw new Error("Choose a PDF, DOC, or DOCX under 40 MB.")
     const next = {
       id: crypto.randomUUID(), filename, bytes, extension, marks: [], applied: new Set(), contentVersion: 0,
-      fields: Object.create(null), wordEdits: Object.create(null), ocr: Object.create(null)
+      fields: Object.create(null), wordEdits: Object.create(null), ocr: Object.create(null), undo: [], redo: []
     }
     if (extension === "pdf") {
       const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false })
