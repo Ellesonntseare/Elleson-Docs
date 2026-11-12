@@ -1,5 +1,6 @@
 import * as pdfjs from "/pdfjs/legacy/build/pdf.mjs"
 import "./offline.mjs"
+import { installTools } from "./workspace-tools.mjs"
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdfjs/legacy/build/pdf.worker.mjs"
 const byId = id => document.getElementById(id)
@@ -7,7 +8,7 @@ const $ = Object.fromEntries(Array.from(document.querySelectorAll("[id]"), item 
 const owner = new URLSearchParams(location.hash.slice(1)).get("owner") ||
   (location.hostname === "appassets.androidplatform.net" ? "local" : null)
 if (owner) history.replaceState(null, "", "/")
-let credential = owner || sessionStorage.getItem("elleson-session") || ""
+let credential = owner || sessionStorage.getItem("elleson-session") || localStorage.getItem("elleson-session") || ""
 let role = owner ? "pc" : "phone"
 let current = null
 let revision = -1
@@ -18,6 +19,7 @@ let zoom = 1
 let viewport
 let mode = "read"
 let renderIndex = 0
+let activeRenderTask
 let localSequence = 0
 let draft
 let activeText
@@ -26,6 +28,7 @@ let pendingEdit = Promise.resolve()
 let editingWord = false
 let wordRender = 0
 let selectedSpan
+let replacementRuns = []
 let loadSequence = 0
 let searchPhrase = ""
 let foundPages = []
@@ -43,6 +46,16 @@ let selectedWordIndex = null
 let wordTarget
 let openTabs = []
 let tabsRendered = ""
+let networkState = "Connected"
+let queuedChanges = []
+let flushing = false
+const tabViews = new Map()
+try { queuedChanges = JSON.parse(localStorage.getItem("elleson-pending-edits") || "[]") } catch {}
+const persistQueue = () => {
+  try { localStorage.setItem("elleson-pending-edits", JSON.stringify(queuedChanges)) }
+  catch { status("Device storage could not retain pending changes. Keep this window open until connected.") }
+}
+const updateConnection = () => { $.connection.textContent = queuedChanges.length ? networkState + " · " + queuedChanges.length + " change(s) waiting to sync" : networkState }
 try { openTabs = JSON.parse(sessionStorage.getItem("elleson-open-tabs") || "[]") } catch {}
 try { savedSignatures = JSON.parse(localStorage.getItem("elleson-signatures") || "[]") } catch {}
 
@@ -114,6 +127,7 @@ async function request(url, options = {}) {
     const problem = await response.json().catch(() => null)
     const error = new Error(problem?.error || "Request failed (" + response.status + ").")
     error.status = response.status
+    error.problem = problem
     throw error
   }
   return response
@@ -141,6 +155,10 @@ function layout() {
   $.find.hidden = !current
   $.save.disabled = !current
   $.print.disabled = !current
+  $["save-original"].disabled = !current
+  $["word-more"].disabled = selectedWordIndex === null
+  $["handoff"].hidden = !current || (!window.EllesonAndroid && role !== "pc")
+  $["handoff"].textContent = location.hostname === "appassets.androidplatform.net" ? "Continue on PC" : role === "pc" ? "Continue on phone" : "Use on phone independently"
   $.welcome.hidden = !connected || Boolean(current)
   $["pair-form"].hidden = connected
   $.toolbar.hidden = !current
@@ -156,7 +174,7 @@ function layout() {
 function updateTabs() {
   if (current?.libraryId) {
     const existing = openTabs.find(tab => tab.id === current.libraryId)
-    if (existing) existing.filename = current.filename
+    if (existing) { existing.filename = current.filename; existing.dirty = current.dirty }
     else openTabs.push({ id: current.libraryId, filename: current.filename })
   }
   const signature = JSON.stringify([openTabs, current?.libraryId])
@@ -170,7 +188,7 @@ function updateTabs() {
     container.className = "document-tab" + (tab.id === current?.libraryId ? " active" : "")
     const button = document.createElement("button")
     button.className = "tab-name"
-    button.textContent = tab.filename
+    button.textContent = tab.filename + (tab.dirty ? " •" : "")
     button.setAttribute("aria-current", tab.id === current?.libraryId ? "page" : "false")
     button.addEventListener("click", () => {
       if (tab.id !== current?.libraryId) void openSaved(tab.id).catch(fail)
@@ -198,7 +216,12 @@ async function closeTab(id) {
     revision = -1
     await refresh()
     if (openTabs.length) await openSaved(openTabs.at(-1).id)
-  } else openTabs = openTabs.filter(tab => tab.id !== id)
+  } else {
+    const tab = openTabs.find(tab => tab.id === id)
+    if (tab?.dirty && !confirm("Close " + tab.filename + " with unsaved changes?")) return
+    if (tab?.documentId) await postJson("/api/close/" + tab.documentId, {})
+    openTabs = openTabs.filter(tab => tab.id !== id)
+  }
   updateTabs()
 }
 $["mobile-tabs"].addEventListener("change", () => {
@@ -212,12 +235,13 @@ function setMode(value) {
   for (const button of document.querySelectorAll("[data-mode]")) button.setAttribute("aria-pressed", button.dataset.mode === mode)
   if (current?.extension === "pdf") {
     drawMarks()
-    status({ read: "View document", edit: "Select existing text to edit it in its original font.", text: "Tap or click where the text should go.", pen: "Draw directly on the page.", highlight: "Draw a highlight over the page.", erase: "Tap an added text or ink mark to erase it.", signature: "Tap the page to place the signature." }[mode])
+    status({ read: "View document", edit: "Select existing text to edit it in its original font.", text: "Tap or click where the text should go.", pen: "Draw directly on the page.", highlight: "Draw a highlight over the page.", erase: "Tap an added text or ink mark to erase it.", signature: "Tap the page to place the signature.", select: "Tap added content to move, resize, rotate or duplicate it.", review: "Tap for a note, or drag across the words to mark up." }[mode])
     if (mode === "edit") void createTextTargets()
   } else if (current) {
     renderWord()
     status(mode === "word" ? "Edit an outlined paragraph. Changes sync as you type." : "View Word text")
   }
+  tools.updated()
 }
 
 function refresh() {
@@ -228,23 +252,31 @@ function refresh() {
       const marker = localSequence
       const response = await request("/api/state?revision=" + revision)
       const state = await response.json()
+      $["recovery-warning"].hidden = !state.recoveryWarning
+      $["recovery-warning"].textContent = state.recoveryWarning || ""
+      networkState = location.hostname === "appassets.androidplatform.net" ? "On this phone" : state.paired ? state.phoneOnline === false ? "Phone reconnecting" : "Phone and PC connected" : "Connected"
+      updateConnection()
+      if (state.tabs) openTabs = state.tabs
       role = state.role
       remoteDraft = state.preview
       if (current?.extension === "pdf") drawMarks()
-      $.connection.textContent = state.paired ? "Phone and PC connected" : location.hostname === "appassets.androidplatform.net" ? "On this phone" : role === "pc" ? "This PC" : ""
+      if (queuedChanges.length && !flushing) void flushQueue()
+      if (state.handoff) void tools.receiveHandoff(state.handoff).catch(fail)
       if (marker !== localSequence) return
       if (!Object.hasOwn(state, "document")) return
       revision = state.revision
       const before = current?.id
       const oldVersion = current?.contentVersion
+      if (before && before !== state.document?.id) tabViews.set(before, { page, zoom, scroll: $.stage.scrollTop })
       current = state.document
       layout()
       if (before !== current?.id) {
         selectedWordIndex = null
         layout()
         editingWord = false
-        page = 1
-        zoom = 1
+        const view = tabViews.get(current?.id)
+        page = view?.page || 1
+        zoom = view?.zoom || 1
         viewport = undefined
         if (loadingTask) void loadingTask.destroy().catch(() => {})
         loadingTask = undefined
@@ -258,14 +290,18 @@ function refresh() {
         if (oldVersion !== current.contentVersion) void loadPdf(current.id)
         else { drawMarks(); syncFields() }
       } else if (current && !editingWord && oldVersion !== current.contentVersion) void renderWord()
+      tools.updated()
     } catch (error) {
       if (error.status === 401 && !owner) {
         credential = ""
         sessionStorage.removeItem("elleson-session")
+        localStorage.removeItem("elleson-session")
         revision = -1
         current = null
         layout()
       }
+      networkState = error.status === 401 ? "Pair again to reconnect" : navigator.onLine === false ? "Offline" : "Reconnecting"
+      updateConnection()
       fail(error)
     }
   })().finally(() => { refreshPending = undefined })
@@ -274,11 +310,12 @@ function refresh() {
 
 function edit(change) {
   const id = current?.id
+  const payload = { ...change, id: change.id || editId() }
   const operation = async () => {
     if (!id || current?.id !== id) return false
     localSequence++
     try {
-      const response = await postJson("/api/edit/" + id, { ...change, id: change.id || editId() })
+      const response = await postJson("/api/edit/" + id, payload)
       const updated = await response.json()
       if (current?.id === id) {
         const before = current.contentVersion
@@ -293,6 +330,25 @@ function edit(change) {
       status("Change synced")
       return true
     } catch (error) {
+      if (!error.status) {
+        if (!queuedChanges.some(item => item.change.id === payload.id)) queuedChanges.push({ document: id, change: payload })
+        persistQueue(); networkState = "Reconnecting"; updateConnection()
+        status("Change retained on this device until the connection returns.")
+        return false
+      }
+      if (error.status === 409 && ["field", "word"].includes(change.kind) && Object.hasOwn(error.problem || {}, "actual")) {
+        if (confirm("This entry was changed on the other device. Choose OK to keep your entry, or Cancel to use the latest entry.")) {
+          const retry = { ...change, id: editId(), before: error.problem.actual }
+          try {
+            const response = await postJson("/api/edit/" + id, retry)
+            current = await response.json(); revision = -1; layout(); syncFields(); return true
+          } catch (error) {
+            if (!error.status) { queuedChanges.push({ document: id, change: retry }); persistQueue(); updateConnection() }
+            fail(error); return false
+          }
+        }
+        revision = -1; await refresh(); return false
+      }
       fail(error)
       if (error.status === 409) revision = -1
       return false
@@ -300,8 +356,28 @@ function edit(change) {
       localSequence++
     }
   }
-  pendingEdit = pendingEdit.then(operation)
+  pendingEdit = pendingEdit.catch(fail).then(operation)
   return pendingEdit
+}
+async function flushQueue() {
+  if (flushing || !credential) return
+  flushing = true
+  try {
+    while (queuedChanges.length) {
+      const queued = queuedChanges[0]
+      try { await postJson("/api/edit/" + queued.document, queued.change) }
+      catch (error) {
+        if (!error.status) break
+        if (error.status === 409 && Object.hasOwn(error.problem || {}, "actual")) {
+          if (confirm("A queued field entry conflicts with the other device. Keep your queued entry? Cancel uses the latest entry.")) { queued.change.before = error.problem.actual; queued.change.id = editId(); persistQueue(); continue }
+        } else {
+          status("A pending edit needs review. Your changes remain on this device.")
+          if (!confirm("A pending edit cannot be applied to the latest document. Discard this queued edit? Cancel keeps it for later.")) break
+        }
+      }
+      queuedChanges.shift(); persistQueue(); revision = -1
+    }
+  } finally { flushing = false; updateConnection() }
 }
 
 async function loadPdf(id) {
@@ -362,6 +438,7 @@ function createThumbnails() {
 
 async function renderPage() {
   if (!pdf) return
+  activeRenderTask?.cancel()
   const sequence = ++renderIndex
   const source = pdf
   const number = page
@@ -373,6 +450,7 @@ async function renderPage() {
   for (const button of $.pages.children) button.setAttribute("aria-pressed", Number(button.dataset.page) === number)
   try {
     const pdfPage = await source.getPage(number)
+    if (sequence !== renderIndex || source !== pdf) return
     const natural = pdfPage.getViewport({ scale: 1 })
     const width = Math.max(140, $.stage.clientWidth - 42)
     const height = Math.max(160, $.stage.clientHeight - 42)
@@ -382,10 +460,11 @@ async function renderPage() {
     const canvas = document.createElement("canvas")
     canvas.width = Math.ceil(frame.width * pixelRatio)
     canvas.height = Math.ceil(frame.height * pixelRatio)
-    await pdfPage.render({
+    activeRenderTask = pdfPage.render({
       canvas, viewport: frame, transform: [pixelRatio, 0, 0, pixelRatio, 0, 0],
       annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS
-    }).promise
+    })
+    await activeRenderTask.promise
     const annotations = await pdfPage.getAnnotations()
     const textContent = await pdfPage.getTextContent()
     if (sequence !== renderIndex || source !== pdf) return
@@ -417,6 +496,7 @@ async function renderPage() {
     drawMarks()
     if (mode === "edit") void createTextTargets()
     status("PDF ready")
+    tools.updated()
   } catch (error) { if (source === pdf && sequence === renderIndex) fail(error) }
 }
 
@@ -446,10 +526,15 @@ function createFields(annotations) {
     })
     const original = checkbox ? field.fieldValue !== "Off" && Boolean(field.fieldValue) : (field.fieldValue?.[0] && Array.isArray(field.fieldValue) ? field.fieldValue[0] : field.fieldValue) || ""
     element.originalValue = original
+    element.lastCommitted = current.fields[field.fieldName] ?? original
     let timer
     const commit = () => {
       clearTimeout(timer)
-      void edit({ kind: "field", name: field.fieldName, value: checkbox ? element.checked : element.value })
+      const value = checkbox ? element.checked : element.value
+      if (value === element.lastCommitted) return
+      const before = element.lastCommitted
+      element.lastCommitted = value
+      void edit({ kind: "field", name: field.fieldName, before, value })
     }
     element.addEventListener("change", commit)
     if (!checkbox && !dropdown) element.addEventListener("input", () => {
@@ -467,6 +552,7 @@ function syncFields() {
     const value = current.fields[element.dataset.field] ?? element.originalValue
     if (element.type === "checkbox") element.checked = Boolean(value)
     else element.value = value
+    element.lastCommitted = value
   }
 }
 
@@ -492,7 +578,9 @@ function drawMarks() {
     context.globalAlpha = mark.opacity ?? 1
     if (mark.kind === "text") {
       context.font = mark.size * viewport.scale + "px Arial, sans-serif"
-      context.fillText(mark.value, ...viewport.convertToViewportPoint(...mark.at))
+      const at = viewport.convertToViewportPoint(...mark.at), angle = (mark.angle || 0) * Math.PI / 180
+      const next = viewport.convertToViewportPoint(mark.at[0] + Math.cos(angle), mark.at[1] + Math.sin(angle))
+      context.save(); context.translate(...at); context.rotate(Math.atan2(next[1] - at[1], next[0] - at[0])); context.fillText(mark.value, 0, 0); context.restore()
     } else {
       const points = mark.points.map(point => viewport.convertToViewportPoint(...point))
       context.beginPath()
@@ -516,6 +604,7 @@ async function renderWord() {
   const render = ++wordRender
   const source = current
   const editable = (element, line, index) => {
+    element.dataset.wordIndex = index
     element.classList.toggle("word-selected", selectedWordIndex === index)
     const select = () => {
       selectedWordIndex = index
@@ -549,7 +638,14 @@ async function renderWord() {
       flush()
     })
     element.addEventListener("keydown", event => {
-      if (event.key === "Enter") { event.preventDefault(); element.blur() }
+      if (event.key === "Enter") {
+        event.preventDefault()
+        const selection = getSelection(), range = selection?.rangeCount ? selection.getRangeAt(0).cloneRange() : null
+        let offset = line.text.length
+        if (range && element.contains(range.startContainer)) { const prefix = range.cloneRange(); prefix.selectNodeContents(element); prefix.setEnd(range.startContainer, range.startOffset); offset = prefix.toString().length }
+        element.blur()
+        void pendingEdit.then(() => tools.splitParagraph(index, offset)).catch(fail)
+      }
     })
   }
   if (source.extension === "docx" && window.docx) {
@@ -601,10 +697,15 @@ async function createTextTargets() {
       })
       button.setAttribute("aria-label", "Edit " + span.text)
       button.addEventListener("click", () => {
+        replacementRuns = spans.slice(spans.indexOf(span))
         selectedSpan = { document: id, page: number, span: span.id, before: span.text, version }
         $["original-font"].textContent = span.font + " · " + Number(span.size.toFixed(2)) + " pt"
         $.replacement.value = span.text
         $["replacement-font"].value = ""
+        $["replacement-paragraph"].checked = false
+        $["replacement-lines"].value = "1"
+        $["replacement-width"].value = ""
+        $["replacement-height"].value = ""
         $["replacement-error"].textContent = ""
         $["replacement-preview"].hidden = true
         $["replace-dialog"].showModal()
@@ -620,7 +721,6 @@ async function createTextTargets() {
 async function openFile() {
   document.activeElement?.blur()
   await pendingEdit
-  if (current?.dirty && !window.confirm("Replace " + current.filename + " as the shared document? Choose Cancel to save a copy first.")) return
   if (window.desktopDocs) {
     await window.desktopDocs.open()
     await refresh()
@@ -631,30 +731,19 @@ $.scan.addEventListener("click", () => $["scan-file"].click())
 $["scan-file"].addEventListener("change", async () => {
   const selected = $["scan-file"].files[0]
   if (!selected) return
-  scanFile = selected
-  const image = $["scan-preview"]
-  if (image.src.startsWith("blob:")) URL.revokeObjectURL(image.src)
-  image.src = URL.createObjectURL(selected)
-  image.style.transform = ""
-  $["scan-angle"].value = "0"
-  $["scan-angle-value"].textContent = "0°"
-  $["scan-dialog"].showModal()
+  await tools.addScan(selected)
 })
-$["scan-cancel"].addEventListener("click", () => { $["scan-dialog"].close(); $["scan-file"].value = ""; scanFile = null })
+$["scan-cancel"].addEventListener("click", () => { $["scan-dialog"].close(); $["scan-file"].value = ""; tools.clearScans() })
 $["scan-angle"].addEventListener("input", () => {
   $["scan-preview"].style.transform = "rotate(" + $["scan-angle"].value + "deg)"
   $["scan-angle-value"].textContent = $["scan-angle"].value + "°"
 })
 $["scan-create"].addEventListener("click", async () => {
-  const selected = scanFile
-  if (!selected) return
   try {
     document.activeElement?.blur()
     await pendingEdit
-    if (current?.dirty && !confirm("Replace the shared document with the scan? Choose Cancel to save a copy first.")) return
     status("Converting photo to PDF…")
-    const { imageToPdf } = await import("./scan-runtime.mjs")
-    const pdf = await imageToPdf(selected, $["scan-angle"].value)
+    const pdf = await tools.createScan()
     await request("/api/open", {
       method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(pdf.name) }, body: pdf
     })
@@ -662,12 +751,12 @@ $["scan-create"].addEventListener("click", async () => {
     $["scan-dialog"].close()
     await refresh()
   } catch (error) { fail(error) }
-  finally { $["scan-dialog"].close(); $["scan-file"].value = ""; scanFile = null }
+  finally { $["scan-dialog"].close(); $["scan-file"].value = ""; tools.clearScans() }
 })
 async function openSaved(id, version) {
   document.activeElement?.blur()
   await pendingEdit
-  if (current?.dirty && !confirm("Replace the shared document? Choose Cancel to save a copy first.")) return
+  if (version && current?.libraryId === id && current.dirty && !confirm("Replace this tab with an earlier saved version? Unsaved work in this tab will be replaced.")) return
   await postJson("/api/library/" + id + "/open", { version })
   $["versions-dialog"].close()
   $["library-dialog"].close()
@@ -699,9 +788,21 @@ async function showLibrary() {
         const saved = await (await request("/api/library/" + record.id + "/versions")).json()
         $["versions-list"].replaceChildren(...saved.map(version => {
           const button = document.createElement("button")
+          button.dataset.versionOpen = version.id
           button.textContent = new Date(version.date).toLocaleString() + " · " + version.filename
           button.addEventListener("click", () => void openSaved(record.id, version.id).catch(fail))
-          return button
+          const row = document.createElement("div"), remove = document.createElement("button")
+          row.className = "actions"
+          remove.textContent = "Delete version"
+          remove.disabled = version.id === saved[0]?.id
+          remove.addEventListener("click", async () => {
+            try {
+              if (!confirm("Delete this saved version?")) return
+              await request("/api/library/" + record.id + "/versions/" + version.id, { method: "DELETE" }); row.remove()
+            } catch (error) { fail(error) }
+          })
+          row.append(button, remove)
+          return row
         }))
         $["versions-dialog"].showModal()
       } catch (error) { fail(error) }
@@ -725,6 +826,7 @@ $.file.addEventListener("change", async () => {
       "Content-Type": "application/octet-stream", "X-Filename": encodeURIComponent(selected.name)
     }, body: selected })
     await refresh()
+    window.EllesonAndroid?.rememberSource?.(current.id)
   } catch (error) { fail(error) }
   finally { $.file.value = "" }
 })
@@ -735,10 +837,12 @@ $.pair.addEventListener("submit", async event => {
     const result = await (await postJson("/api/pair", { code: $.code.value })).json()
     credential = result.token
     sessionStorage.setItem("elleson-session", credential)
+    localStorage.setItem("elleson-session", credential)
     revision = -1
     layout()
     status("Connected")
     await refresh()
+    await tools.acceptPendingHandoff()
   } catch (error) { fail(error) }
 })
 $.connect.addEventListener("click", async () => {
@@ -900,7 +1004,7 @@ $["extract-pages"].addEventListener("click", async () => {
   } catch (error) { fail(error) }
 })
 $["combine-pages"].addEventListener("click", () => {
-  if (confirm("Combine as a fixed PDF? Form fields and annotations in both documents will become part of the pages.")) $["combine-file"].click()
+  if ($["combine-editable"].checked || confirm("Combine as a fixed PDF? Form fields and annotations in both documents will become part of the pages.")) $["combine-file"].click()
 })
 $["combine-file"].addEventListener("change", async () => {
   const selected = $["combine-file"].files[0]
@@ -908,7 +1012,7 @@ $["combine-file"].addEventListener("change", async () => {
   try {
     $["pages-dialog"].close()
     await pendingEdit
-    await request("/api/combine/" + current.id, {
+    await request("/api/combine/" + current.id + ($["combine-editable"].checked ? "?editable=1" : ""), {
       method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Operation-Id": editId() }, body: selected
     })
     revision = -1
@@ -962,7 +1066,9 @@ for (const [button, dialog] of [["format-paragraph", "word-format-dialog"], ["in
     await pendingEdit
     if (selectedWordIndex === null || !current?.lines) return
     wordTarget = { id: current.id, index: selectedWordIndex, version: current.contentVersion }
+    wordTarget.selection = tools.selection()
     if (dialog === "word-format-dialog") $["word-format-form"].reset()
+    if (dialog === "word-format-dialog") $["word-selection-only"].checked = wordTarget.selection?.index === selectedWordIndex && wordTarget.selection?.document === current.id
     byId(dialog).showModal()
   })
 }
@@ -997,6 +1103,13 @@ $["word-format-form"].addEventListener("submit", async event => {
     if (value) format[key] = key === "size" ? Number(value) : ["bold", "italic"].includes(key) ? value === "true" : value
   }
   if (!Object.keys(format).length) return
+  if ($["word-selection-only"].checked) {
+    const selection = wordTarget.selection
+    if (!selection || selection.document !== current.id || selection.index !== wordTarget.index) { status("Select words inside one paragraph first."); return }
+    $["word-format-dialog"].close()
+    if (await edit({ kind: "word-tools", action: "range", index: wordTarget.index, version: wordTarget.version, start: selection.start, end: selection.end, format })) await renderWord()
+    return
+  }
   $["word-format-dialog"].close()
   if (await edit({ kind: "word-format", index: wordTarget.index, version: wordTarget.version, format })) await renderWord()
 })
@@ -1160,14 +1273,14 @@ $["signature-insert"].addEventListener("click", () => {
 $["replace-text"].addEventListener("submit", async event => {
   event.preventDefault()
   if (selectedSpan?.document === current?.id) {
-    const success = await edit({ ...selectedSpan, kind: "replace", value: $.replacement.value, font: $["replacement-font"].value })
+    const success = await edit({ ...selectedSpan, kind: "replace", value: $.replacement.value, font: $["replacement-font"].value, layout: replacementLayout() })
     if (success) $["replace-dialog"].close()
     else $["replacement-error"].textContent = $.status.textContent
   }
 })
 $["preview-replacement"].addEventListener("click", async () => {
   try {
-    const response = await postJson("/api/preview-text/" + current.id, { ...selectedSpan, value: $.replacement.value, font: $["replacement-font"].value })
+    const response = await postJson("/api/preview-text/" + current.id, { ...selectedSpan, value: $.replacement.value, font: $["replacement-font"].value, layout: replacementLayout() })
     const image = $["replacement-preview"]
     if (image.src.startsWith("blob:")) URL.revokeObjectURL(image.src)
     image.src = URL.createObjectURL(await response.blob())
@@ -1175,23 +1288,34 @@ $["preview-replacement"].addEventListener("click", async () => {
     $["replacement-error"].textContent = ""
   } catch (error) { $["replacement-error"].textContent = error.message }
 })
+function replacementLayout() {
+  return { paragraph: $["replacement-paragraph"].checked, lines: Number($["replacement-lines"].value), width: Number($["replacement-width"].value) || undefined, height: Number($["replacement-height"].value) || undefined, spacing: Number($["replacement-spacing"].value), align: $["replacement-align"].value }
+}
+$["replacement-lines"].addEventListener("change", () => {
+  if ($["replacement-paragraph"].checked) $.replacement.value = replacementRuns.slice(0, Number($["replacement-lines"].value)).map(span => span.text).join("\n")
+})
 
 let resizeTimer
 new ResizeObserver(() => {
   clearTimeout(resizeTimer)
   resizeTimer = setTimeout(() => void renderPage(), 90)
 }).observe($.stage)
+const tools = installTools({ get: () => ({ current, page, zoom, viewport, mode, role, credential, selectedWordIndex, wordTarget, selectedSpan }),
+  request, postJson, edit, editId, setMode, go, status, fail, refresh, renderWord,
+  setView: (number, magnification) => { page = number || 1; zoom = magnification || 1 },
+  pending: () => pendingEdit, invalidate: () => { revision = -1 },
+  selectWord: index => { selectedWordIndex = index; layout() } })
 layout()
 status(credential ? "Ready" : "Enter the pairing code from your PC.")
 window.addEventListener("elleson-open-file", event => void (async () => {
   if (location.hostname !== "appassets.androidplatform.net") return
   document.activeElement?.blur()
   await pendingEdit
-  if (current?.dirty && !confirm("Replace the document with unsaved changes? Choose Cancel to save a copy first.")) return
   const bytes = Uint8Array.from(atob(event.detail.data), character => character.charCodeAt(0))
   await request("/api/open", { method: "POST", headers: { "X-Filename": encodeURIComponent(event.detail.name) }, body: new Blob([bytes]) })
   revision = -1
   await refresh()
+  window.EllesonAndroid?.rememberSource?.(current.id)
 })().catch(fail))
-void refresh().then(() => window.EllesonAndroid?.ready?.())
+void refresh().then(async () => { window.EllesonAndroid?.ready?.(); await tools.acceptPendingHandoff() }).catch(fail)
 setInterval(() => void refresh(), 450)

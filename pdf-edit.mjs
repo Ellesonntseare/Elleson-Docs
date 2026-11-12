@@ -56,7 +56,7 @@ export function extract(bytes, index, ocr = []) {
   return result
 }
 
-export function replace(bytes, index, spanId, before, value, ocrRun, fontName) {
+export function replace(bytes, index, spanId, before, value, ocrRun, fontName, layout = {}) {
   const document = new mupdf.PDFDocument(bytes)
   const page = document.loadPage(index)
   const { structured, spans } = readSpans(page)
@@ -67,9 +67,10 @@ export function replace(bytes, index, spanId, before, value, ocrRun, fontName) {
       origin: [ocrRun.rect[0], ocrRun.rect[3] - ocrRun.size * .18]
     } : spans[spanId]
     if (!run || run.text !== before) throw new Error("The selected text changed. Select it again.")
+    const originalFontName = run.font.getName()
     if (fontName && !["Helvetica", "Times-Roman", "Courier"].includes(fontName)) throw new Error("Choose a supported replacement font.")
     if (fontName) run.font = new mupdf.Font(fontName)
-    const widths = Array.from(value, char => {
+    const widths = Array.from(value.replaceAll("\n", ""), char => {
       const glyph = run.font.encodeCharacter(char.codePointAt(0))
       if (!glyph && char.trim()) throw new Error("The original font has no glyph for “" + char + "”. Choose text that this font supports.")
       return run.font.advanceGlyph(glyph) * run.size
@@ -84,12 +85,40 @@ export function replace(bytes, index, spanId, before, value, ocrRun, fontName) {
     if (Math.abs(dx) > .001) limits.push(((dx > 0 ? bounds[2] - 6 : bounds[0] + 6) - run.origin[0]) / dx)
     if (Math.abs(dy) > .001) limits.push(((dy > 0 ? bounds[3] - 6 : bounds[1] + 6) - run.origin[1]) / dy)
     const available = horizontal ? right - run.origin[0] : Math.min(...limits)
-    if (widths.reduce((sum, width) => sum + width, 0) > available) {
+    const paragraph = layout.paragraph === true
+    let lines = [value], chosen = [run], lineWidth = available, lineHeight = run.size * 1.2
+    if (paragraph) {
+      if (!horizontal || ocrRun) throw new Error("Paragraph reflow currently requires horizontal digital text. Edit scanned or rotated lines individually.")
+      const count = Number(layout.lines || 1)
+      if (!Number.isInteger(count) || count < 1 || count > 20) throw new Error("Select between 1 and 20 text runs.")
+      chosen = spans.slice(spanId, spanId + count)
+      if (chosen.length !== count || chosen.some(other => other !== run && other.font.getName() !== originalFontName || Math.abs(other.direction[1]) > .01)) throw new Error("Select adjacent horizontal text with a consistent font.")
+      lineWidth = Number(layout.width) || Math.max(...chosen.map(other => other.rect[2])) - run.origin[0]
+      const height = Number(layout.height) || Math.max(...chosen.map(other => other.rect[3])) - run.rect[1]
+      const spacing = Number(layout.spacing || 1.2)
+      if (lineWidth < 10 || lineWidth > bounds[2] - run.origin[0] || height < run.size || height > bounds[3] - run.rect[1] || spacing < 1 || spacing > 3) throw new Error("Choose a text area inside the page and line spacing between 1 and 3.")
+      lineHeight = run.size * spacing
+      const measure = text => Array.from(text).reduce((width, char) => width + run.font.advanceGlyph(run.font.encodeCharacter(char.codePointAt(0))) * run.size, 0)
+      lines = []
+      for (const paragraphText of value.split("\n")) {
+        let line = ""
+        for (const word of paragraphText.split(/\s+/).filter(Boolean)) {
+          if (measure(word) > lineWidth) throw new Error("A word is wider than the text area. Increase the width or use shorter wording.")
+          if (line && measure(line + " " + word) > lineWidth) { lines.push(line); line = word }
+          else line += (line ? " " : "") + word
+        }
+        lines.push(line)
+      }
+      const bottom = run.rect[1] + run.size + (lines.length - 1) * lineHeight
+      if (bottom > run.rect[1] + height) throw new Error("The paragraph does not fit the selected height. Increase the height or shorten the wording.")
+      if (spans.some(other => !chosen.includes(other) && other.rect[0] < run.origin[0] + lineWidth && other.rect[2] > run.origin[0] && other.rect[1] < bottom && other.rect[3] > run.rect[1])) throw new Error("The text area overlaps other text. Reduce its width or height.")
+    } else if (value.includes("\n") || widths.reduce((sum, width) => sum + width, 0) > available) {
       throw new Error("The new text exceeds the available space at the original font size. Shorten it to keep the layout.")
     }
     redaction = page.createAnnotation("Redact")
     const inset = ocrRun ? -1 : Math.min(run.size * .25, (run.rect[3] - run.rect[1]) * .2)
-    if (!horizontal && run.quads) redaction.setQuadPoints(run.quads)
+    if (paragraph) redaction.setQuadPoints(chosen.flatMap(other => other.quads))
+    else if (!horizontal && run.quads) redaction.setQuadPoints(run.quads)
     else redaction.setRect([run.rect[0], run.rect[1] + inset, run.rect[2], run.rect[3] - inset])
     redaction.update()
     redaction.applyRedaction(0, ocrRun ? mupdf.PDFPage.REDACT_IMAGE_PIXELS : mupdf.PDFPage.REDACT_IMAGE_NONE,
@@ -99,7 +128,11 @@ export function replace(bytes, index, spanId, before, value, ocrRun, fontName) {
     writer = new mupdf.DocumentWriter(overlayBuffer, "pdf", "")
     device = writer.beginPage(bounds)
     text = new mupdf.Text()
-    text.showString(run.font, [run.size * dx, run.size * dy, run.size * dy, -run.size * dx, ...run.origin], value)
+    lines.forEach((line, index) => {
+      const length = Array.from(line).reduce((sum, char) => sum + run.font.advanceGlyph(run.font.encodeCharacter(char.codePointAt(0))) * run.size, 0)
+      const offset = layout.align === "center" ? (lineWidth - length) / 2 : layout.align === "right" ? lineWidth - length : 0
+      text.showString(run.font, [run.size * dx, run.size * dy, run.size * dy, -run.size * dx, run.origin[0] + (paragraph ? offset : 0), run.origin[1] + index * lineHeight], line)
+    })
     device.fillText(text, mupdf.Matrix.identity, mupdf.ColorSpace.DeviceRGB, run.color, 1)
     writer.endPage()
     writer.close()

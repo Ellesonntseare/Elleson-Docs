@@ -1,50 +1,51 @@
 # Elleson Docs
 
-Elleson Docs 0.2.0 is a Windows and Android document viewer and editor. Android can open PDF and DOCX files independently, or connect to Windows for live two-way editing over local Wi-Fi. In a paired session, either device can open and save the shared document. Each device controls its own page and zoom.
+Elleson Docs 0.3.0 is a Windows and Android document viewer and editor. It supports independent phone use and live two-way editing over local Wi-Fi. Each device keeps its own page and zoom. The current shared tab is visible on both devices, while other tabs retain their own unsaved work.
 
-## Included features
+## Documents and editing
 
-- PDF pages, selectable text, search, thumbnails, zoom, device bookmarks and embedded document outline navigation.
-- Existing PDF text editing with original font, size, color and baseline, including rotated text. Preview replacements or explicitly choose a fallback font.
-- Ordinary PDF text fields, checkboxes and single-choice dropdowns. Add text, handwriting, colored ink and highlights.
-- A larger signature pad, reusable device signatures and three placement sizes. Erase marks or complete signatures. Undo and redo document changes.
-- Camera/photo-to-PDF conversion with manual straightening. Local English, French and Spanish OCR, with bundled language data on both platforms.
-- Rotate, delete, reorder and extract PDF pages. Combine documents as fixed pages, preserving visible answers and annotations.
-- DOCX paragraph editing with existing text-run formatting retained. Paragraph fonts, sizes, bold, italic, alignment and lists. Insert tables and PNG/JPEG images.
-- Windows legacy DOC text viewing and editing, with edited exports converted to DOCX.
-- Recent documents, pinning, document tabs, saved versions and session recovery.
-- Save-state indicators, confirmations before replacing unsaved work, ordinary and fixed PDF exports, and a print workflow.
+- PDF viewing, selectable text, search, thumbnails, zoom, device bookmarks and embedded outlines.
+- Original-font PDF text replacement, rotated text, fallback fonts and previews. Paragraph reflow supports horizontal digital text with consistent fonts, an explicit text-run count, text-area dimensions, alignment and spacing. Overlapping text areas and missing glyphs are rejected.
+- PDF text fields, checkboxes and single-choice dropdowns; added text, handwriting and highlights.
+- Select added content to drag, resize, rotate, duplicate, edit or delete it. Multistroke signatures transform and erase as a group. A larger signature pad and reusable device signatures are included.
+- Insert or replace PDF images. Replacement removes image pixels in the selected image rectangle and preserves text in that region; overlapping images and complex compositions should be reviewed visually.
+- Native PDF sticky notes, underlines, strikeouts, highlights and comment replies. These remain editable PDF annotations in ordinary exports.
+- Rotate, delete, reorder and extract pages. Choose fixed combination or preserve supported editable form fields. Imported field names receive a unique prefix.
+- DOCX paragraph and selected-word formatting, fonts, size, bold, italic, alignment and lists. Enter splits an editable paragraph. Insert paragraphs, page breaks, tables and images. Add/delete rows and columns in regular tables, resize a paragraph's image, and set default headers, footers and page-number fields.
+- Windows opens legacy DOC as text and converts edited output to DOCX. Standalone Android supports PDF and DOCX.
 
-## Use
+## Phone and PC
 
-Extract the complete Windows ZIP and run Elleson Docs.exe. Install.cmd adds desktop and Start menu shortcuts and registers supported types in Windows Open with. It does not change default applications automatically.
+For live editing, run Windows and put both devices on the same trusted Wi-Fi. Choose Connect phone on Windows, enter its address in Android, and pair using the temporary code. The phone is remembered for up to 30 days unless disconnected. Windows tries to keep the same local port across restarts. If that port is occupied, it uses another port and shows the new address.
 
-Install the APK on Android 8 or newer. Choose Open documents on phone for independent use. Android Open with and Share accept PDF and DOCX files from other apps. For live editing, keep Windows running, put both devices on the same Wi-Fi, choose Connect phone on Windows, then enter the displayed address and temporary pairing code in Android. Local phone documents and the PC session are separate. To bring an independently edited phone document into a PC session, save it on the phone, connect, and open that saved copy from the phone.
+On Android, Open documents on phone works independently. Open with and Share accept PDF and DOCX from other applications. Continue on PC packages the current edited document and takes you to the connection screen. After connecting, it opens the edited file on the PC with the requested page and zoom. Continue on phone sends the paired document into the Android standalone workspace. Handoffs create a separate local copy; subsequent independent edits are not automatically merged into the old PC tab.
 
-Files contains recent documents, pins and saved versions. Desktop tabs and the phone document selector reopen saved files. Switching away from unsaved work asks for confirmation. Save copy writes a separate file. A saved version is a document snapshot, while Undo and Redo operate on editing history.
+Connection status distinguishes connected, reconnecting and offline states and shows pending changes. Completed editing operations are retained in device storage during network loss and retried with the same operation ID. Conflicting PDF-field or Word-paragraph entries require an explicit keep-mine/use-latest choice. If an older operation cannot apply to a changed document, the app retains it until reviewed or explicitly discarded. A disconnected page must reconnect before it can reload network-served viewer assets.
 
-## Scope and limits
+## Files and saving
 
-Files must be smaller than 40 MB. One document is shared live at a time. Tabs reopen saved versions rather than keeping multiple simultaneous editing sessions. Pairing uses a temporary code over local HTTP, intended for a trusted local network.
+Tabs retain independent edits and undo history while switching. The whole workspace recovers on restart. Up to 12 tabs are allowed, with additional memory limits. Closing an unsaved tab asks for confirmation. Save writes back to a tracked original file when access is available. Windows checks the original file's hash and asks before overwriting an external change, and writes through a temporary file. Android checks its tracked content URI and falls back to the system Save a copy picker when direct access is unavailable. Save a copy always creates a separate file. Ctrl+S invokes Save; Ctrl+Shift+S invokes Save a copy.
 
-Standalone Android supports PDF and DOCX and requires a recent Android System WebView. Legacy DOC requires the Windows host. Connecting does not automatically merge the standalone phone document with the PC document.
+Files provides recent documents, pins, saved versions, deletion and version comparison. Comparison highlights differing text lines, form answers and page counts, with a 200-page text-extraction limit. It does not detect every visual-only change. Storage & backup reports saved-library usage, controls retention between 1 and 100 versions per document (default 20), and exports a ZIP of standard document files and an index. The latest version is protected from individual deletion; the whole library document can be removed. Exported originals are kept. Retention changes delete older saved snapshots, so export a backup first when needed.
 
-The original PDF font must contain replacement glyphs, and text must fit the available line width. Some unusual font encodings, protected/encrypted PDFs and complex form types remain unsupported. Scans use estimated fonts after OCR and require visual checking. Combining PDFs creates fixed content, so combined form fields are no longer interactive.
+The library keeps a recovery index. Damaged indexes and missing files produce recovery guidance. PC session Undo holds up to 50 changes within an estimated 100 MB history budget and resets on restart. Android retains up to 30 changes in its local session. Saved-version limits do not include live tab histories. Clearing Android app data removes the app's local workspace and library; export important files separately.
 
-Word rendering uses docx-preview and is not a complete Microsoft Word layout engine. Advanced Office structures, tracked changes and every complex layout are not fully supported. Formatting applies to the selected paragraph. Images retain aspect ratio, but interactive image resizing and advanced table editing are not included. Moving or resizing an inserted signature requires erasing and placing it again. Bookmarks and reusable signatures are stored per device and are not embedded in exported documents.
+## Scanning and interface
 
-PC Undo holds up to 50 changes within a 100 MB memory budget and resets on switching documents or restarting. Android retains up to 30 changes in its local session. Saved versions consume local storage independently. Clearing Android app data removes its local documents and versions. Export important files to system storage separately.
+Scan document captures up to 30 photos into one PDF. Each page has separate corner coordinates, perspective correction, straightening, and document/receipt/photo processing. Page-edge detection estimates corners from bright paper regions and must be checked on low-contrast or cluttered images. Document and receipt modes reduce uneven background brightness. OCR runs locally in English, French and Spanish using bundled language data.
 
-## Verification
+Tool groups provide View, Edit, Fill & Sign, Pages and Scan controls. All tools remains available. On a phone, tools sit at the bottom; More contains additional save, handoff, history and print actions. PDF rendering cancels stale page requests during rapid navigation. Long-PDF and image-heavy-Word fixtures measure open and navigation times on the test PC.
 
-Automated checks cover original and rotated PDF text, OCR, form-preserving page operations, fixed exports, revision-aware save state, saved versions, pins, recovery, Word formatting/tables/images, and live two-way PDF and Word changes. A browser harness serves only bundled Android assets to check independent editing, exports and recovery without a PC backend. The Windows executable is checked through actual launch, editing, native saving and reopening.
+## Limits and validation
 
-The APK build verifies compilation, signature, alignment and metadata. Physical Android installation, camera behavior, native saving, touch latency, network interruptions and real printers still require hands-on validation. Browser viewport checks do not establish physical-device behavior.
+Files must be smaller than 40 MB. Pairing uses local HTTP and is intended for a trusted local network. Protected/encrypted PDFs, unusual font encodings, complex form types and every Office structure are not fully supported. Scanned text uses estimated fonts. Reflow currently supports horizontal digital text with a consistent font; scanned and rotated text are edited line by line. DOCX rendering uses docx-preview and is not a complete Microsoft Word layout engine. Merged/irregular tables require a dedicated editor. Word image resizing targets the first image in the selected paragraph. Header/footer changes affect default section parts; complex first/even-page layouts need review. Page numbers are Word fields and depend on the receiving Word renderer's field calculation. Bookmarks and reusable signatures stay on their device.
 
-## Development and license
+Automated checks cover PDF fonts, paragraph reflow, image replacement, native annotations/replies, editable form combination, Word formatting and structure, saved versions, index recovery, independent tabs, queued edits, conflict choices, handoff packets and printed page counts. A browser harness serves only bundled Android assets for independent phone editing, multi-page scanning, perspective processing, OCR, export and recovery. Windows executable checks include original-file saving and external-change protection. Physical Android installation, native camera and saving, touch accuracy, real Wi-Fi interruptions and physical printers require hands-on device validation; browser checks do not establish those results.
 
-Use Node.js 24 or later. Run npm ci, npm run pretest, then npm start. Run npm test for automated checks. The pretest step generates browser bundles and Android assets. Browser tests use Edge through Playwright.
+## Install, development and license
 
-Run npm run build:windows to package Windows. ELLESON_ELECTRON_ZIP_DIR optionally selects an existing Electron ZIP directory. scripts/build-android.ps1 takes Jdk, BuildTools, AndroidJar and Output. It requires Java 17, Android build tools/platform 35, Node dependencies and Python with Pillow. Android targets version 15, requires version 8 or later and uses package za.co.elleson.docs.
+Extract the complete Windows ZIP and run Elleson Docs.exe. Install.cmd adds shortcuts and Windows Open with registration. Install the APK on Android 8 or newer with a recent Android System WebView.
 
-See NOTICE.md and LICENSE for dependency licenses and the logo prompt. The combined application uses AGPL-3.0-or-later because it includes MuPDF.js. Signing keys, build outputs and dependencies are excluded from Git.
+Use Node.js 24 or later. Run npm ci, npm run pretest, then npm start. npm test runs the test suite and generates browser bundles/Android assets first. Browser tests use Edge through Playwright. npm run build:windows packages Windows. scripts/build-android.ps1 accepts Jdk, BuildTools, AndroidJar and Output and requires Java 17, Android build tools/platform 35, Node dependencies and Python/Pillow. Android targets 15 and uses package za.co.elleson.docs.
+
+See NOTICE.md and LICENSE for dependency licenses and the logo prompt. The combined application uses AGPL-3.0-or-later because it includes MuPDF.js. Keys, build outputs and dependencies are excluded from Git.

@@ -46,8 +46,10 @@ public final class MainActivity extends Activity {
     private byte[] localExport;
     private String localExportId;
     private String localExportVersion;
+    private String localExportReceipt = "";
     private Uri incomingDocument;
     private boolean viewerReady;
+    private Uri pendingSource;
     private static final String LOCAL_ORIGIN = "https://appassets.androidplatform.net";
 
     @Override public void onCreate(Bundle savedInstanceState) {
@@ -90,6 +92,7 @@ public final class MainActivity extends Activity {
     private void importIncomingDocument() {
         if (incomingDocument == null || viewer == null || !LOCAL_ORIGIN.equals(origin)) return;
         final Uri uri = incomingDocument;
+        pendingSource = uri;
         final WebView target = viewer;
         incomingDocument = null;
         new Thread(() -> {
@@ -247,6 +250,7 @@ public final class MainActivity extends Activity {
                 }
                 Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
                 intent.setType(image ? "image/*" : "*/*");
                 if (!image) intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
                     "application/pdf", "application/msword",
@@ -272,6 +276,63 @@ public final class MainActivity extends Activity {
     }
 
     public final class ExportBridge {
+        @JavascriptInterface public void handoff(String data, String name, int page, double zoom, boolean toPC) {
+            if (data == null || data.length() > 57000000) return;
+            try {
+                org.json.JSONObject packet = new org.json.JSONObject();
+                packet.put("data", data); packet.put("name", name); packet.put("page", page); packet.put("zoom", zoom); packet.put("target", toPC ? "pc" : "phone");
+                try (OutputStream output = new java.io.FileOutputStream(new java.io.File(getFilesDir(), "handoff.json"))) {
+                    output.write(packet.toString().getBytes(StandardCharsets.UTF_8));
+                }
+                runOnUiThread(() -> { if (toPC) showConnection(); else loadViewer(LOCAL_ORIGIN); });
+            } catch (Exception error) { runOnUiThread(() -> Toast.makeText(MainActivity.this, "Could not prepare document handoff. Your current document is still available.", Toast.LENGTH_LONG).show()); }
+        }
+        @JavascriptInterface public String pendingHandoff() {
+            try { return new String(java.nio.file.Files.readAllBytes(new java.io.File(getFilesDir(), "handoff.json").toPath()), StandardCharsets.UTF_8); }
+            catch (Exception error) { return ""; }
+        }
+        @JavascriptInterface public void finishHandoff() { new java.io.File(getFilesDir(), "handoff.json").delete(); }
+        @JavascriptInterface public void rememberSource(String id) {
+            final Uri uri = pendingSource;
+            if (uri == null || id == null) return;
+            pendingSource = null;
+            new Thread(() -> {
+                try { getPreferences(MODE_PRIVATE).edit().putString("source-" + id, uri.toString()).putString("hash-" + id, hashUri(uri)).apply(); }
+                catch (Exception ignored) {}
+            }).start();
+        }
+        @JavascriptInterface public boolean saveOriginalData(String data, String name, String id, String version, String receipt) {
+            String savedUri = getPreferences(MODE_PRIVATE).getString("source-" + id, null);
+            String expected = getPreferences(MODE_PRIVATE).getString("hash-" + id, null);
+            if (savedUri == null || expected == null || data.length() > 80000000) return false;
+            new Thread(() -> {
+                Uri uri = Uri.parse(savedUri);
+                try {
+                    String actual = hashUri(uri);
+                    byte[] bytes = Base64.decode(data, Base64.DEFAULT);
+                    Runnable write = () -> new Thread(() -> {
+                        try {
+                            try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
+                                if (output == null) throw new IllegalStateException();
+                                output.write(bytes);
+                            }
+                            getPreferences(MODE_PRIVATE).edit().putString("hash-" + id, hashUri(uri)).apply();
+                            runOnUiThread(() -> {
+                                if (viewer != null) viewer.evaluateJavascript("window.dispatchEvent(new CustomEvent('elleson-save-ack',{detail:{id:"
+                                    + org.json.JSONObject.quote(id) + ",version:" + org.json.JSONObject.quote(version) + ",receipt:" + org.json.JSONObject.quote(receipt) + "}}))", null);
+                                Toast.makeText(MainActivity.this, "Saved to the opened file", Toast.LENGTH_LONG).show();
+                            });
+                        } catch (Exception error) { fallbackCopy(data, name, id, version, receipt); }
+                    }).start();
+                    if (!actual.equals(expected)) runOnUiThread(() -> new android.app.AlertDialog.Builder(MainActivity.this)
+                        .setTitle("File changed outside Elleson Docs").setMessage("Choose a copy to keep both versions.")
+                        .setNegativeButton("Cancel", null).setNeutralButton("Save a copy", (dialog, which) -> fallbackCopy(data, name, id, version, receipt))
+                        .setPositiveButton("Overwrite", (dialog, which) -> write.run()).show());
+                    else write.run();
+                } catch (Exception error) { fallbackCopy(data, name, id, version, receipt); }
+            }, "elleson-docs-save-original").start();
+            return true;
+        }
         @JavascriptInterface public void ready() {
             runOnUiThread(() -> { viewerReady = true; importIncomingDocument(); });
         }
@@ -299,7 +360,7 @@ public final class MainActivity extends Activity {
                     saveUrl = "local";
                     Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
                     intent.addCategory(Intent.CATEGORY_OPENABLE);
-                    intent.setType(name.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf") ? "application/pdf"
+                    intent.setType(name.toLowerCase(java.util.Locale.ROOT).endsWith(".zip") ? "application/zip" : name.toLowerCase(java.util.Locale.ROOT).endsWith(".pdf") ? "application/pdf"
                             : "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
                     intent.putExtra(Intent.EXTRA_TITLE, name);
                     startActivityForResult(intent, SAVE_FILE);
@@ -338,6 +399,10 @@ public final class MainActivity extends Activity {
         super.onActivityResult(request, result, data);
         if (request == PICK_FILE && fileCallback != null) {
             Uri selected = result == RESULT_OK ? cameraUri != null ? cameraUri : data != null ? data.getData() : null : null;
+            if (selected != null && cameraUri == null) {
+                pendingSource = selected;
+                try { getContentResolver().takePersistableUriPermission(selected, data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION)); } catch (Exception ignored) {}
+            }
             Uri[] selection = selected == null ? null : new Uri[] { selected };
             cameraUri = null;
             fileCallback.onReceiveValue(selection);
@@ -349,18 +414,20 @@ public final class MainActivity extends Activity {
             byte[] bytes = localExport;
             String documentId = localExportId;
             String version = localExportVersion;
+            String receipt = localExportReceipt;
+            localExportReceipt = "";
             localExport = null;
             saveUrl = saveToken = null;
             if (result == RESULT_OK && data != null && data.getData() != null && url != null) {
                 new Thread(() -> {
-                    if ("local".equals(url)) writeLocal(bytes, data.getData(), documentId, version);
+                    if ("local".equals(url)) writeLocal(bytes, data.getData(), documentId, version, receipt);
                     else writeExport(url, token, data.getData());
                 }, "elleson-docs-export").start();
             }
         }
     }
 
-    private void writeLocal(byte[] bytes, Uri target, String id, String version) {
+    private void writeLocal(byte[] bytes, Uri target, String id, String version, String receipt) {
         String message = "Copy saved";
         try {
             try (OutputStream output = getContentResolver().openOutputStream(target, "wt")) {
@@ -368,6 +435,9 @@ public final class MainActivity extends Activity {
                 output.write(bytes);
             }
             runOnUiThread(() -> {
+                if (viewer != null && receipt != null && !receipt.isEmpty()) viewer.evaluateJavascript(
+                    "window.dispatchEvent(new CustomEvent('elleson-save-ack',{detail:{id:" + org.json.JSONObject.quote(id)
+                    + ",version:" + org.json.JSONObject.quote(version) + ",receipt:" + org.json.JSONObject.quote(receipt) + "}}))", null);
                 if (viewer != null && LOCAL_ORIGIN.equals(origin)) viewer.evaluateJavascript(
                     "window.dispatchEvent(new CustomEvent('elleson-local-saved',{detail:{id:"
                     + org.json.JSONObject.quote(id) + ",version:" + org.json.JSONObject.quote(version) + "}}))", null);
@@ -424,4 +494,16 @@ public final class MainActivity extends Activity {
     }
 
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+    private void fallbackCopy(String data, String name, String id, String version, String receipt) {
+        runOnUiThread(() -> { if (saveUrl != null) return; localExportReceipt = receipt; new ExportBridge().saveData(data, name, id, version); });
+    }
+    private String hashUri(Uri uri) throws Exception {
+        java.security.MessageDigest hash = java.security.MessageDigest.getInstance("SHA-256");
+        try (InputStream input = getContentResolver().openInputStream(uri)) {
+            if (input == null) throw new IllegalStateException();
+            byte[] buffer = new byte[32768];
+            for (int count; (count = input.read(buffer)) != -1;) hash.update(buffer, 0, count);
+        }
+        return Base64.encodeToString(hash.digest(), Base64.NO_WRAP);
+    }
 }

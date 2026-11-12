@@ -15,11 +15,13 @@
     <div class="brand"><img src="/logo.png" alt=""><strong>Elleson Docs</strong></div>
     <div id="file-title" class="file-title"></div>
     <span id="save-state" role="status"></span>
+    <span id="recovery-warning" role="alert" hidden></span>
     <div class="actions">
       <button id="open" hidden>Open file</button>
       <button id="library" hidden>Files</button>
       <button id="connect" hidden>Connect phone</button>
       <button id="find" hidden>Find</button>
+      <button id="handoff" hidden>Continue on phone</button>
       <button id="more-actions" aria-expanded="false" aria-controls="history-actions">More</button>
       <div id="history-actions" class="actions">
         <button id="history-undo" disabled>Undo</button>
@@ -28,6 +30,7 @@
         <button id="scan">Scan document</button>
       </div>
       <button id="save" class="primary" disabled>Save copy</button>
+      <button id="save-original" disabled>Save</button>
       <button id="print" disabled>Print</button>
     </div>
     <input id="file" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
@@ -36,6 +39,9 @@
     <select id="mobile-tabs" aria-label="Switch document" hidden></select>
   </header>
   <nav class="toolbar" id="toolbar" aria-label="Document tools" hidden>
+    <div id="tool-groups" class="actions" aria-label="Tool groups">
+      <button data-group="all" aria-pressed="true">All tools</button><button data-group="view">View tools</button><button data-group="edit">Edit tools</button><button data-group="fill">Fill &amp; Sign</button><button data-group="pages">Page tools</button><button data-group="scan">Scan tools</button>
+    </div>
     <div class="actions" id="pdf-tools">
       <button data-mode="read" aria-pressed="true">View</button>
       <button data-mode="edit" aria-pressed="false">Edit PDF</button>
@@ -45,6 +51,9 @@
       <button data-mode="pen" aria-pressed="false">Draw</button>
       <button data-mode="highlight" aria-pressed="false">Highlight</button>
       <button data-mode="erase" aria-pressed="false">Erase mark</button>
+      <button data-mode="select" aria-pressed="false">Select added content</button>
+      <button id="pdf-image">PDF images</button>
+      <button id="review">Comments &amp; review</button>
       <button id="signature">Signature</button>
       <button id="organize">Organize pages</button>
       <label class="ink-setting">Ink <input id="ink-color" type="color" value="#093352" aria-label="Ink color"></label>
@@ -57,6 +66,7 @@
       <button id="format-paragraph" disabled>Format paragraph</button>
       <button id="insert-table" disabled>Insert table</button>
       <button id="insert-image" disabled>Insert image</button>
+      <button id="word-more" disabled>More Word tools</button>
       <input id="word-image-file" type="file" accept="image/png,image/jpeg" hidden>
     </div>
     <div class="actions page-tools" id="page-tools">
@@ -95,6 +105,7 @@
         <canvas id="ink-canvas" aria-hidden="true"></canvas>
         <div id="pdf-fields"></div>
         <div id="pdf-text"></div>
+        <div id="selection-box" hidden><button id="selection-edit">Edit selection</button><button id="selection-resize" aria-label="Resize selected mark">↘</button></div>
       </div>
       <article id="word-sheet" class="word-sheet" aria-label="Word document" hidden></article>
     </div>
@@ -121,6 +132,7 @@
   <dialog id="library-dialog">
     <h2>Documents</h2>
     <div id="library-list" class="library-list"></div>
+    <button id="storage">Storage &amp; backup</button>
     <form method="dialog"><button>Close</button></form>
   </dialog>
   <dialog id="bookmarks-dialog">
@@ -151,6 +163,12 @@
     <form id="replace-text">
       <label>Replacement text <textarea id="replacement" rows="4" maxlength="2000"></textarea></label>
       <label>Font <select id="replacement-font"><option value="">Keep original font</option><option>Helvetica</option><option>Times-Roman</option><option>Courier</option></select></label>
+      <label class="flatten-choice"><input id="replacement-paragraph" type="checkbox"> Reflow a paragraph</label>
+      <label>Consecutive text runs to replace<input id="replacement-lines" type="number" min="1" max="20" value="1"></label>
+      <label>Text area width (points, blank keeps existing width)<input id="replacement-width" type="number" min="10"></label>
+      <label>Text area height (points, blank keeps existing height)<input id="replacement-height" type="number" min="10"></label>
+      <label>Alignment<select id="replacement-align"><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option></select></label>
+      <label>Line spacing<input id="replacement-spacing" type="number" min="1" max="3" step="0.1" value="1.2"></label>
       <button type="button" id="preview-replacement">Preview change</button>
       <p id="replacement-error" role="alert"></p>
       <img id="replacement-preview" alt="Preview of the edited PDF page" hidden>
@@ -175,12 +193,19 @@
     <label>Page order or selection, separated by commas <input id="page-order" placeholder="1, 2, 3"></label>
     <div class="actions"><button id="reorder-pages">Apply page order</button><button id="extract-pages">Extract selected pages</button></div>
     <button id="combine-pages">Combine another PDF as fixed pages</button>
+    <label class="flatten-choice"><input id="combine-editable" type="checkbox"> Preserve supported editable form fields</label>
     <input id="combine-file" type="file" accept=".pdf,application/pdf" hidden>
     <form method="dialog"><button>Close</button></form>
   </dialog>
   <dialog id="scan-dialog">
     <h2>Prepare scan</h2>
     <img id="scan-preview" alt="Document photo">
+    <div id="scan-pages" class="actions"></div>
+    <button id="scan-add">Add another page</button>
+    <button id="scan-auto">Detect page edges</button>
+    <label>Image mode <select id="scan-filter" aria-label="Image mode"><option value="document">Document</option><option value="receipt">Receipt</option><option value="photo">Photo</option></select></label>
+    <p>Adjust the four page corners for cropping and perspective correction.</p>
+    <div id="scan-corners" class="corner-controls"></div>
     <label>Straighten <input id="scan-angle" type="range" min="-15" max="15" value="0" step="0.5"><output id="scan-angle-value">0°</output></label>
     <div class="actions"><button id="scan-cancel">Cancel</button><button id="scan-create" class="primary">Create PDF</button></div>
   </dialog>
@@ -188,6 +213,7 @@
     <h2>Format selected paragraph</h2>
     <form id="word-format-form">
       <label>Font <input id="word-font" maxlength="80" placeholder="Keep original font" list="word-fonts"></label>
+      <label class="flatten-choice"><input id="word-selection-only" type="checkbox"> Format selected words only</label>
       <datalist id="word-fonts"><option>Arial</option><option>Calibri</option><option>Times New Roman</option><option>Georgia</option><option>Courier New</option></datalist>
       <label>Size in points <input id="word-size" type="number" min="6" max="96" step="0.5" placeholder="Keep original size"></label>
       <label>Weight <select id="word-bold"><option value="">Keep original</option><option value="true">Bold</option><option value="false">Regular</option></select></label>
@@ -196,6 +222,49 @@
       <label>List <select id="word-list"><option value="">Keep original</option><option value="none">No list</option><option value="bullet">Bullets</option><option value="decimal">Numbered</option></select></label>
       <div class="actions"><button type="button" id="word-format-cancel">Cancel</button><button class="primary">Apply formatting</button></div>
     </form>
+  </dialog>
+  <dialog id="mark-dialog">
+    <h2>Edit selected content</h2>
+    <p>Drag the selection to move it. Drag its corner to resize.</p>
+    <label>Move right (points)<input id="mark-x" type="number" value="0"></label>
+    <label>Move up (points)<input id="mark-y" type="number" value="0"></label>
+    <label>Scale<input id="mark-scale" type="number" value="1" min="0.1" max="10" step="0.1"></label>
+    <label>Rotate (degrees)<input id="mark-angle" type="number" value="0" min="-360" max="360"></label>
+    <label>Selected mark text<input id="mark-value" maxlength="400"></label>
+    <div class="actions"><button id="mark-apply">Apply</button><button id="mark-duplicate">Duplicate</button><button id="mark-delete">Delete</button></div>
+    <form method="dialog"><button>Close</button></form>
+  </dialog>
+  <dialog id="storage-dialog">
+    <h2>Storage &amp; backup</h2><p id="storage-details"></p>
+    <label>Saved versions to retain per document<input id="version-limit" type="number" min="1" max="100" value="20"></label>
+    <button id="storage-apply">Apply retention limit</button><button id="backup-export">Export library backup</button>
+    <form method="dialog"><button>Close</button></form>
+  </dialog>
+  <dialog id="compare-dialog">
+    <h2>Compare saved versions</h2><p>Compare wording, form answers and page counts. Visual differences can be checked by opening each saved version.</p>
+    <label>Earlier version<select id="compare-left"></select></label><label>Later version<select id="compare-right"></select></label><button id="compare-run">Compare</button>
+    <div id="compare-result" class="comparison"></div><form method="dialog"><button>Close</button></form>
+  </dialog>
+  <dialog id="review-dialog">
+    <h2>Comments &amp; review</h2><p>Annotations are saved inside the PDF and can be reopened in compatible viewers.</p>
+    <label>Type<select id="review-type"><option value="Text">Sticky note</option><option value="Underline">Underline</option><option value="StrikeOut">Strikeout</option><option value="Highlight">Highlight</option></select></label>
+    <label>Comment<textarea id="review-text" maxlength="4000"></textarea></label>
+    <label>Reply to<select id="review-parent"><option value="">New comment</option></select></label>
+    <button id="review-place">Place on page</button><div id="review-list" class="library-list"></div><form method="dialog"><button>Close</button></form>
+  </dialog>
+  <dialog id="pdf-image-dialog">
+    <h2>PDF images</h2><label>Image<select id="pdf-image-target"><option value="">Insert a new image</option></select></label>
+    <label>Left (points)<input id="pdf-image-x" type="number" value="40"></label><label>Bottom (points)<input id="pdf-image-y" type="number" value="40"></label>
+    <label>Width (points)<input id="pdf-image-width" type="number" value="200" min="1"></label><label>Height (points)<input id="pdf-image-height" type="number" value="150" min="1"></label>
+    <button id="pdf-image-pick">Choose PNG or JPEG</button><input id="pdf-image-file" type="file" accept="image/png,image/jpeg" hidden>
+    <form method="dialog"><button>Close</button></form>
+  </dialog>
+  <dialog id="word-tools-dialog">
+    <h2>Word tools</h2>
+    <div class="actions"><button data-word-action="paragraph">New paragraph</button><button data-word-action="page-break">Page break</button><button data-word-action="add-row">Add table row</button><button data-word-action="delete-row">Delete table row</button><button data-word-action="add-column">Add table column</button><button data-word-action="delete-column">Delete table column</button></div>
+    <label>Selected paragraph image width (pixels)<input id="word-image-width" type="number" min="20" max="1000" value="320"></label><button id="word-image-resize">Resize image</button>
+    <label>Header text<input id="word-header" maxlength="1000"></label><label>Footer text<input id="word-footer" maxlength="1000"></label><label class="flatten-choice"><input id="word-page-numbers" type="checkbox"> Number footer pages</label><button id="word-header-footer">Apply header &amp; footer</button>
+    <form method="dialog"><button>Close</button></form>
   </dialog>
   <dialog id="table-dialog">
     <h2>Insert table after selected paragraph</h2>

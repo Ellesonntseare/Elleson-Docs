@@ -3,12 +3,15 @@ import { unzipSync, zipSync, strFromU8, strToU8 } from "fflate"
 import { extract, replace, organize, scanImage, imageInfo } from "./pdf-edit.mjs"
 import { applyFormatting, ensureListParts, insertTable, insertImage, validFormat } from "./word-format.mjs"
 import { diffChars } from "diff"
+import { editWord } from "./word-tools.mjs"
+import { changeMarks } from "./mark-tools.mjs"
+import { review, reviewList, image as changeImage, images, combineEditable } from "./pdf-tools.mjs"
 
 const namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 const capture = file => ({
   bytes: file.bytes, marks: structuredClone(file.marks), fields: { ...file.fields },
   wordEdits: { ...file.wordEdits }, wordFormats: structuredClone(file.wordFormats || {}), lines: structuredClone(file.lines),
-  pages: file.pages, ocr: structuredClone(file.ocr || {})
+  pages: file.pages, ocr: structuredClone(file.ocr || {}), originalFields: { ...file.originalFields }
 })
 
 export async function install() {
@@ -24,18 +27,25 @@ export async function install() {
     request.onerror = () => reject(request.error)
   })
   let file = stored || null
+  const readStored = key => new Promise((resolve, reject) => { const request = database.transaction("documents").objectStore("documents").get(key); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+  const workspace = await readStored("workspace")
+  const files = new Map((workspace?.files || (file ? [file] : [])).map(item => [item.id, item]))
+  if (workspace) file = files.get(workspace.active) || [...files.values()].at(-1) || null
+  let versionLimit = (await readStored("settings"))?.limit || 20
   let library = await new Promise((resolve, reject) => {
     const request = database.transaction("documents").objectStore("documents").get("library")
     request.onsuccess = () => resolve(request.result || [])
     request.onerror = () => reject(request.error)
   })
   let revision = 1
+  let storageWarning = ""
   let queue = Promise.resolve()
   const fetchAsset = window.fetch.bind(window)
   window.addEventListener("elleson-local-saved", event => {
     const operation = queue.then(async () => {
-      if (file?.id !== event.detail.id) return
-      file.savedNumber = Number(event.detail.version)
+      const saved = files.get(event.detail.id)
+      if (!saved) return
+      saved.savedNumber = Math.max(saved.savedNumber, Number(event.detail.version))
       revision++
       await persist()
     })
@@ -45,13 +55,14 @@ export async function install() {
     const transaction = database.transaction("documents", "readwrite")
     transaction.objectStore("documents").put(file, "active")
     transaction.objectStore("documents").put(library, "library")
+    transaction.objectStore("documents").put({ active: file?.id, files: [...files.values()] }, "workspace")
+    transaction.objectStore("documents").put({ limit: versionLimit }, "settings")
     transaction.oncomplete = resolve
-    transaction.onerror = () => reject(transaction.error)
-    transaction.onabort = () => reject(transaction.error || new Error("Phone storage is full."))
+    transaction.onerror = transaction.onabort = () => reject(new Error("Phone storage is full or unavailable. Keep this document open and save a copy to another location."))
   })
   const snapshot = () => file && ({
     id: file.id, filename: file.filename, extension: file.extension, pages: file.pages,
-    contentVersion: file.contentVersion, marks: file.marks, fields: file.fields,
+    contentVersion: file.contentVersion, marks: file.marks, fields: file.fields, originalFields: file.originalFields || {},
     saveExtension: file.extension, dirty: file.changeNumber !== file.savedNumber, libraryId: file.libraryId,
     canUndo: file.undo.length > 0, canRedo: file.redo.length > 0,
     lines: file.lines?.map((line, index) => ({ ...line, text: file.wordEdits[index] ?? line.text }))
@@ -65,6 +76,7 @@ export async function install() {
     }
     record.updated = Date.now()
     record.versions.push({ id: crypto.randomUUID(), filename: target.filename, date: Date.now(), size: bytes.length, bytes })
+    record.versions = record.versions.slice(-versionLimit)
   }
   function wordXml() {
     const archive = unzipSync(file.bytes)
@@ -136,11 +148,49 @@ export async function install() {
     const parts = url.pathname.split("/").filter(Boolean)
     const action = parts[1]
     const body = typeof options.body === "string" ? JSON.parse(options.body) : options.body
+    if (action === "storage") {
+      if (options.method === "POST") {
+        if (!Number.isInteger(body.limit) || body.limit < 1 || body.limit > 100) throw new Error("Keep between 1 and 100 versions.")
+        versionLimit = body.limit
+        library.forEach(record => { record.versions = record.versions.slice(-versionLimit) })
+        await persist()
+      }
+      return Response.json({ documents: library.length, versions: library.reduce((sum, record) => sum + record.versions.length, 0), bytes: library.reduce((sum, record) => sum + record.versions.reduce((size, version) => size + version.size, 0), 0), limit: versionLimit })
+    }
+    if (action === "backup") {
+      const entries = { "README.txt": strToU8("Elleson Docs library backup. documents/ contains standard document files.") }
+      for (const record of library) for (const version of record.versions) entries["documents/" + version.id + "." + version.filename.split(".").pop()] = version.bytes
+      entries["index.json"] = strToU8(JSON.stringify(library.map(record => ({ ...record, versions: record.versions.map(({ bytes, ...version }) => version) }))))
+      return new Response(zipSync(entries, { level: 1 }), { headers: { "Content-Type": "application/zip" } })
+    }
     if (action === "library") {
       const record = library.find(record => record.id === parts[2])
       if (!parts[2]) return Response.json(library.map(({ versions, ...record }) => ({ ...record, versionCount: versions.length }))
         .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated - a.updated))
       if (!record) throw new Error("Saved document not found.")
+      if (options.method === "DELETE") {
+        if (parts[3] === "versions") {
+          if (record.versions.at(-1).id === parts[4]) throw new Error("Keep the latest version or remove the whole document.")
+          record.versions = record.versions.filter(version => version.id !== parts[4])
+        } else library = library.filter(item => item !== record)
+        await persist(); return new Response(null, { status: 204 })
+      }
+      if (parts[3] === "compare") {
+        const results = []
+        for (const key of ["left", "right"]) {
+          const saved = record.versions.find(version => version.id === url.searchParams.get(key))
+          if (!saved) throw new Error("Saved version not found.")
+          if (/\.pdf$/i.test(saved.filename)) {
+            const pdf = await PDFDocument.load(saved.bytes), count = pdf.getPageCount()
+            const fields = pdf.getForm().getFields().map(field => field.getName() + ": " + (field.getText?.() ?? field.isChecked?.() ?? field.getSelected?.()?.join(", ") ?? ""))
+            results.push({ filename: saved.filename, pages: count, limited: count > 200, text: Array.from({ length: Math.min(count, 200) }, (_, index) => "Page " + (index + 1) + "\n" + extract(saved.bytes, index).map(span => span.text).join("\n")).join("\n\n") + "\n" + fields.join("\n") })
+          } else {
+            const xml = new DOMParser().parseFromString(strFromU8(unzipSync(saved.bytes)["word/document.xml"]), "application/xml")
+            results.push({ filename: saved.filename, text: Array.from(xml.getElementsByTagNameNS(xml.documentElement.namespaceURI, "p"), p => p.textContent).join("\n") })
+          }
+        }
+        return Response.json(results)
+      }
       if (parts[3] === "versions") return Response.json([...record.versions].reverse().map(({ bytes, ...version }) => version))
       if (parts[3] === "pin") {
         record.pinned = body.pinned === true
@@ -148,6 +198,8 @@ export async function install() {
         return new Response(null, { status: 204 })
       }
       if (parts[3] === "open") {
+        const existing = !body.version && [...files.values()].find(item => item.libraryId === record.id)
+        if (existing) { file = existing; revision++; await persist(); return new Response(null, { status: 204 }) }
         const version = body.version ? record.versions.find(version => version.id === body.version) : record.versions.at(-1)
         if (!version) throw new Error("Saved version not found.")
         return handle(new URL("/api/open", location.href), {
@@ -156,17 +208,20 @@ export async function install() {
       }
     }
     if (action === "state") return Response.json({
-      revision, role: "pc", paired: false, preview: null,
+      revision, role: "pc", paired: false, preview: null, recoveryWarning: storageWarning,
+      tabs: [...files.values()].map(item => ({ id: item.libraryId, documentId: item.id, filename: item.filename, dirty: item.changeNumber !== item.savedNumber })),
       ...(Number(url.searchParams.get("revision")) === revision ? {} : { document: snapshot() })
     })
     if (action === "close") {
-      if (!file || parts[2] !== file.id) throw new Error("The open document changed.")
-      file = null
+      if (!files.has(parts[2])) throw new Error("The open document changed.")
+      files.delete(parts[2])
+      if (file?.id === parts[2]) file = [...files.values()].at(-1) || null
       revision++
       await persist()
       return new Response(null, { status: 204 })
     }
     if (action === "open") {
+      if (!options.libraryId && (files.size >= 12 || [...files.values()].reduce((sum, item) => sum + item.bytes.length, 0) > 120 * 1024 * 1024)) throw new Error("Close another tab before opening more documents.")
       const filename = decodeURIComponent(new Headers(options.headers).get("X-Filename") || "")
       const extension = filename.split(".").pop().toLowerCase()
       if (!["pdf", "docx"].includes(extension)) throw new Error("Standalone mode currently supports PDF and DOCX. Use the PC to open legacy DOC files.")
@@ -176,7 +231,11 @@ export async function install() {
         id: crypto.randomUUID(), filename, extension, bytes, marks: [], fields: {}, wordEdits: {}, wordFormats: {},
         undo: [], redo: [], contentVersion: 0, changeNumber: 0, savedNumber: 0, applied: [], ocr: {}, libraryId: options.libraryId
       }
-      if (extension === "pdf") next.pages = (await PDFDocument.load(bytes)).getPageCount()
+      if (extension === "pdf") {
+        const pdf = await PDFDocument.load(bytes)
+        next.pages = pdf.getPageCount()
+        next.originalFields = Object.fromEntries(pdf.getForm().getFields().map(field => [field.getName(), field.getText?.() ?? field.isChecked?.() ?? field.getSelected?.()?.[0] ?? ""]))
+      }
       else {
         const archive = unzipSync(bytes, { filter: entry => {
           if (entry.originalSize > 40 * 1024 * 1024) throw new Error("This Word file is too large.")
@@ -191,11 +250,24 @@ export async function install() {
       }
       file = next
       if (!options.libraryId) recordVersion(file, bytes)
+      if (options.libraryId) for (const [id, item] of files) if (item.libraryId === options.libraryId) files.delete(id)
+      files.set(file.id, file)
       revision++
       await persist()
       return new Response(null, { status: 204 })
     }
     if (!file || parts[2] !== file.id) return Response.json({ error: "The open document changed." }, { status: 409 })
+    if (action === "review") return Response.json(reviewList(file.bytes, Number(parts[3]) - 1))
+    if (action === "pdf-images") return Response.json(images(file.bytes, Number(parts[3]) - 1))
+    if (action === "pdf-image") {
+      const description = JSON.parse(new Headers(options.headers).get("X-Image-Edit") || "{}")
+      if (file.applied.includes(description.id)) return Response.json(snapshot())
+      if (description.version !== file.contentVersion) throw new Error("Select the page again.")
+      const before = capture(file)
+      file.bytes = await changeImage(file.bytes, new Uint8Array(await options.body.arrayBuffer()), description)
+      file.contentVersion++; file.changeNumber++; file.undo.push(before); file.redo = []; file.applied.push(description.id)
+      revision++; await persist(); return Response.json(snapshot())
+    }
     if (action === "preview") return new Response(null, { status: 204 })
     if (action === "source") return new Response(await source(), { headers: {
       "Content-Type": file.extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -238,17 +310,18 @@ export async function install() {
     if (action === "preview-text") {
       if (body.version !== file.contentVersion) throw new Error("The page changed. Select the text again.")
       const run = typeof body.span === "string" ? file.ocr?.[body.page - 1]?.find(line => line.id === body.span) : undefined
-      const bytes = replace(file.bytes, body.page - 1, body.span, body.before, body.value, run, body.font)
+      const bytes = replace(file.bytes, body.page - 1, body.span, body.before, body.value, run, body.font, body.layout)
       return new Response(scanImage(bytes, body.page - 1).image, { headers: { "Content-Type": "image/png" } })
     }
     if (action === "save") {
       const bytes = await exported(url.searchParams.get("flatten") === "1")
-      recordVersion(file, bytes)
-      if (!window.EllesonAndroid) {
-        file.savedNumber = file.changeNumber
-        revision++
+      if (!url.searchParams.has("transfer")) {
+        const previousLibrary = library.map(record => ({ ...record, versions: [...record.versions] })), previousSaved = file.savedNumber
+        recordVersion(file, bytes)
+        if (!window.EllesonAndroid) { file.savedNumber = file.changeNumber; revision++ }
+        try { await persist() }
+        catch { library = previousLibrary; file.savedNumber = previousSaved; storageWarning = "The copy is available to export, but local history could not be updated. Free phone storage and keep your exported copy."; revision++ }
       }
-      await persist()
       return new Response(bytes, { headers: { "Content-Type": file.extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "X-Elleson-Revision": String(file.changeNumber),
         "Content-Disposition": "attachment; filename*=UTF-8''" + encodeURIComponent(file.filename) } })
@@ -291,10 +364,12 @@ export async function install() {
       const operationId = new Headers(options.headers).get("X-Operation-Id")
       if (file.applied.includes(operationId)) return Response.json(snapshot())
       const before = capture(file)
-      const result = organize(await exported(false), "combine", null, new Uint8Array(await options.body.arrayBuffer()))
+      const incoming = new Uint8Array(await options.body.arrayBuffer())
+      const result = url.searchParams.get("editable") === "1" ? await combineEditable(await exported(false), incoming) : organize(await exported(false), "combine", null, incoming)
       file.undo.push(before)
       file.redo = []
       Object.assign(file, result, { marks: [], fields: {} })
+      file.originalFields = Object.fromEntries((await PDFDocument.load(file.bytes)).getForm().getFields().map(field => [field.getName(), field.getText?.() ?? field.isChecked?.() ?? field.getSelected?.()?.[0] ?? ""]))
       file.contentVersion++
       file.changeNumber++
       revision++
@@ -315,8 +390,31 @@ export async function install() {
       if (body.kind === "pages") {
         if (body.version !== file.contentVersion) throw new Error("The document changed.")
         Object.assign(file, organize(await exported(false), body.action, body.pages), { marks: [], fields: {} })
+        file.originalFields = Object.fromEntries((await PDFDocument.load(file.bytes)).getForm().getFields().map(field => [field.getName(), field.getText?.() ?? field.isChecked?.() ?? field.getSelected?.()?.[0] ?? ""]))
         file.contentVersion++
-      } else if (body.kind === "field") file.fields[body.name] = body.value
+      } else if (body.kind === "field") {
+        const actual = file.fields[body.name] ?? file.originalFields?.[body.name] ?? ""
+        if (Object.hasOwn(body, "before") && actual !== body.before) return Response.json({ error: "This field changed.", actual, code: "EDIT_CONFLICT" }, { status: 409 })
+        file.fields[body.name] = body.value
+      }
+      else if (body.kind === "transform") file.marks = changeMarks(file.marks, body)
+      else if (body.kind === "review") {
+        if (body.version !== file.contentVersion) throw new Error("The page changed.")
+        file.bytes = review(file.bytes, body); file.contentVersion++
+      }
+      else if (body.kind === "word-tools") {
+        if (body.version !== file.contentVersion) throw new Error("The document changed. Select the text again.")
+        file.bytes = await source(); file.wordEdits = {}; file.wordFormats = {}
+        const { document, archive } = wordXml()
+        editWord(document, archive, body, DOMParser, XMLSerializer, strFromU8, strToU8)
+        archive["word/document.xml"] = strToU8(new XMLSerializer().serializeToString(document))
+        file.bytes = zipSync(archive)
+        file.lines = Array.from(document.getElementsByTagNameNS(document.documentElement.namespaceURI, "p"), paragraph => {
+          const nodes = Array.from(paragraph.getElementsByTagNameNS(document.documentElement.namespaceURI, "t"))
+          return { text: nodes.map(node => node.textContent).join(""), editable: nodes.length > 0, style: "" }
+        })
+        file.contentVersion++
+      }
       else if (body.kind === "word-format") {
         if (body.version !== file.contentVersion) throw new Error("The document changed. Select the paragraph again.")
         if (!validFormat(body.format)) throw new Error("Choose valid text formatting.")
@@ -341,7 +439,7 @@ export async function install() {
       } else if (body.kind === "replace") {
         if (body.version !== file.contentVersion) throw new Error("The page changed. Select the text again.")
       const run = typeof body.span === "string" ? file.ocr?.[body.page - 1]?.find(line => line.id === body.span) : undefined
-      file.bytes = replace(file.bytes, body.page - 1, body.span, body.before, body.value, run, body.font)
+      file.bytes = replace(file.bytes, body.page - 1, body.span, body.before, body.value, run, body.font, body.layout)
       if (file.ocr) file.ocr[body.page - 1] = []
         file.contentVersion++
       } else if (body.kind === "undo") {

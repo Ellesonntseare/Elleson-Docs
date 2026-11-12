@@ -1,0 +1,42 @@
+const { test } = require("node:test")
+const assert = require("node:assert/strict")
+const fs = require("node:fs/promises")
+const path = require("node:path")
+const { chromium } = require("playwright")
+const { PDFDocument } = require("pdf-lib")
+const { Document, Paragraph, ImageRun, Packer } = require("docx")
+const { start } = require("../server.cjs")
+
+test("long PDFs and image-heavy Word files render with rapid navigation cancelling stale work", { timeout: 90000 }, async () => {
+  const host = await start(), browser = await chromium.launch({ channel: "msedge" }), results = {}
+  try {
+    const screen = await browser.newPage({ viewport: { width: 1220, height: 870 } }), errors = []
+    screen.on("pageerror", error => errors.push(error.message))
+    const pdf = await PDFDocument.create()
+    for (let index = 0; index < 120; index++) pdf.addPage([500, 680]).drawText("Long document page " + (index + 1), { x: 40, y: 600, size: 18 })
+    const started = performance.now()
+    await host.open("long.pdf", Buffer.from(await pdf.save()))
+    await screen.goto(host.address + "/#owner=" + host.owner)
+    await screen.getByText("PDF ready", { exact: true }).waitFor()
+    results.pdf120PagesOpenMs = Math.round(performance.now() - started)
+    const navigation = performance.now()
+    await screen.getByRole("spinbutton", { name: "Page number", exact: true }).fill("120")
+    await screen.getByRole("spinbutton", { name: "Page number", exact: true }).press("Enter")
+    await screen.locator("#selection-layer").getByText("Long document page 120", { exact: true }).waitFor()
+    results.lastPageMs = Math.round(performance.now() - navigation)
+    await screen.getByRole("spinbutton", { name: "Page number", exact: true }).fill("1")
+    await screen.getByRole("spinbutton", { name: "Page number", exact: true }).press("Enter")
+    await screen.locator("#selection-layer").getByText("Long document page 1", { exact: true }).waitFor()
+    await screen.evaluate(() => { for (const number of [2, 50, 3, 100, 4, 120]) { const input = document.querySelector("#page"); input.value = number; input.dispatchEvent(new Event("change")) } })
+    await screen.locator("#selection-layer").getByText("Long document page 120", { exact: true }).waitFor()
+    const image = await fs.readFile(path.resolve("web/logo.png")), children = []
+    for (let index = 0; index < 12; index++) children.push(new Paragraph("Image section " + index), new Paragraph({ children: [new ImageRun({ data: image, type: "png", transformation: { width: 320, height: 320 } })] }))
+    const bytes = await Packer.toBuffer(new Document({ sections: [{ children }] })), wordStarted = performance.now()
+    await host.open("images.docx", bytes)
+    await screen.waitForFunction(() => document.querySelectorAll("#word-sheet img").length === 12 && [...document.querySelectorAll("#word-sheet img")].every(image => image.complete && image.naturalWidth > 0))
+    results.word12ImagesOpenMs = Math.round(performance.now() - wordStarted)
+    assert.deepEqual(errors, [])
+    if (process.env.ELLESON_DOCS_OUTPUTS) await fs.writeFile(path.join(process.env.ELLESON_DOCS_OUTPUTS, "Elleson-Docs-0.3.0-Performance.json"), JSON.stringify({ scope: "Windows Edge browser on this PC; timings depend on machine load. Physical Android performance is unmeasured.", ...results }, null, 2))
+    console.log("Measured fixture timings (ms): " + JSON.stringify(results))
+  } finally { await browser.close(); await new Promise(resolve => host.server.close(resolve)) }
+})

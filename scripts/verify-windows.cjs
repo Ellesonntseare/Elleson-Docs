@@ -39,10 +39,26 @@ async function verify() {
     await window.locator("#file-title").getByText("saved.pdf", { exact: true }).waitFor()
     await window.getByText("PDF ready", { exact: true }).waitFor()
     assert.equal(await window.getByRole("textbox", { name: "Name", exact: true }).inputValue(), "Native Windows save")
+    await window.getByRole("textbox", { name: "Name", exact: true }).fill("Saved back to original")
+    await window.getByRole("textbox", { name: "Name", exact: true }).blur()
+    await window.getByText("Change synced", { exact: true }).waitFor()
+    await window.getByRole("button", { name: "Save", exact: true }).click()
+    await window.waitForFunction(() => document.querySelector("#status").textContent.startsWith("Saved to "))
+    assert.equal((await PDFDocument.load(await fs.readFile(exported))).getForm().getTextField("Name").getText(), "Saved back to original")
+    const changed = await PDFDocument.load(await fs.readFile(exported))
+    changed.getForm().getTextField("Name").setText("Changed in another application")
+    await fs.writeFile(exported, await changed.save())
+    await window.getByRole("textbox", { name: "Name", exact: true }).fill("Keep this edit unsaved")
+    await window.getByRole("textbox", { name: "Name", exact: true }).blur()
+    await window.getByText("Change synced", { exact: true }).waitFor()
+    await application.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 0 }) })
+    await window.getByRole("button", { name: "Save", exact: true }).click()
+    await window.getByText("Save cancelled", { exact: true }).waitFor()
+    assert.equal((await PDFDocument.load(await fs.readFile(exported))).getForm().getTextField("Name").getText(), "Changed in another application")
     if (process.env.ELLESON_DOCS_OUTPUTS) {
       await window.screenshot({ path: path.join(process.env.ELLESON_DOCS_OUTPUTS, "Elleson-Docs-Windows.png") })
     }
-    console.log("Windows executable opened a PDF from its launch argument, edited it, saved through desktop IPC and reopened the result.")
+    console.log("Windows executable opened, edited, saved and reopened a PDF; normal Save updated its file and protected an external change when cancelled.")
   } finally {
     await application.close()
   }

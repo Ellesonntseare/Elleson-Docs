@@ -1,6 +1,6 @@
 {
   "name": "elleson-docs",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Windows and Android document viewer and editor with live two-way editing",
   "main": "main.cjs",
   "scripts": {
@@ -8,6 +8,7 @@
     "start": "electron .",
     "serve": "node server.cjs",
     "build:windows": "node scripts/build-windows.mjs",
+    "prebuild:windows": "node scripts/build-offline.mjs",
     "pretest": "node scripts/build-offline.mjs"
   },
   "repository": {

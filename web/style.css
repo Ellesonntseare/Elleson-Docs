@@ -30,6 +30,22 @@ button[aria-pressed="true"] { background: var(--wash); color: var(--green); bord
 .document-tab .tab-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #mobile-tabs { display: none; }
 #save-state { color: var(--subtle); font-size: 12px; }
+#recovery-warning { flex-basis: 100%; grid-column: 1 / -1; color: #734d00; background: #fff1bb; padding: 8px; font-size: 13px; }
+#tool-groups { flex-basis: 100%; padding-bottom: 5px; border-bottom: 1px solid var(--rule); }
+#tool-groups button { border: 0; border-radius: 4px; }
+#selection-box { position: absolute; border: 2px solid var(--green); touch-action: none; cursor: move; z-index: 3; transform-origin: left top; }
+#selection-edit { position: absolute; left: 0; bottom: 100%; white-space: nowrap; }
+#selection-resize { position: absolute; right: -8px; bottom: -8px; padding: 0; width: 30px; min-height: 30px; cursor: nwse-resize; }
+.pdf-sheet:is([data-mode="select"], [data-mode="review"]) #ink-canvas { pointer-events: auto; touch-action: none; cursor: crosshair; }
+.comparison { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.comparison section { min-width: 0; overflow-wrap: anywhere; }
+.comparison p { white-space: pre-wrap; margin: 0; padding: 4px; }
+.comparison .changed { background: #fff1bb; }
+#compare-dialog { width: min(calc(100% - 24px), 1000px); }
+.corner-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.corner-controls input { width: 65px; }
+#pdf-image-dialog, #word-tools-dialog, #mark-dialog, #review-dialog { line-height: 1.6; }
+dialog > label { margin-block: 10px; }
 .flatten-choice { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .ink-setting { display: flex; align-items: center; gap: 4px; font-size: 12px; }
 .ink-setting input { width: 38px; height: 32px; padding: 2px; }
@@ -146,12 +162,14 @@ dialog::backdrop { background: #172a2188; }
   .stage { padding: 8px; }
   .page-tools { width: 100%; flex-wrap: nowrap; overflow-x: auto; }
   .page-tools > * { flex-shrink: 0; }
-  body { grid-template-rows: auto auto minmax(0, 1fr) auto auto; }
+  body { grid-template-rows: auto auto minmax(0, 1fr) auto auto auto; }
   .toolbar { display: contents; }
-  #pdf-tools, #word-tools { min-width: 0; grid-row: 4; flex-wrap: nowrap; overflow-x: auto; background: white; border-top: 1px solid var(--rule); padding: 6px 8px; }
+  #tool-groups { grid-row: 4; min-width: 0; overflow-x: auto; flex-wrap: nowrap; padding: 4px 8px; background: white; }
+  #tool-groups button { min-height: 34px; white-space: nowrap; }
+  #pdf-tools, #word-tools { min-width: 0; grid-row: 5; flex-wrap: nowrap; overflow-x: auto; background: white; border-top: 1px solid var(--rule); padding: 6px 8px; }
   #pdf-tools button, #word-tools button { flex-shrink: 0; }
   #page-tools { grid-row: 2; padding: 6px 8px; background: white; border-bottom: 1px solid var(--rule); }
-  .status { grid-row: 5; font-size: 12px; }
+  .status { grid-row: 6; font-size: 12px; }
   .page-index input, dialog input, .pair-form input { font-size: 16px; }
   button { min-height: 48px; padding-inline: 10px; }
 }
