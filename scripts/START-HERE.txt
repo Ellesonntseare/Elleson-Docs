@@ -1,0 +1,78 @@
+ELLESON DOCS 0.1.0
+
+WINDOWS
+
+Extract the entire Windows ZIP to a folder.
+Run Elleson Docs.exe from that folder.
+For desktop and Start menu shortcuts, run Install.cmd.
+Open file lets you choose a PDF, DOC, or DOCX.
+You can also drag a document onto Elleson Docs.exe.
+
+PHONE
+
+Install Elleson-Docs-0.1.0.apk on an Android 8 or newer phone.
+Keep the Windows app running.
+Connect both devices to the same Wi-Fi.
+On the PC, choose Connect phone.
+Enter one of the displayed PC addresses in the Android app.
+Enter the temporary pairing code.
+If Windows displays a firewall prompt, allow the app on your private network.
+
+WORKING WITH DOCUMENTS
+
+Open file is available on both devices after pairing.
+An opened file becomes the shared document.
+Use View to read a PDF, select and copy text, navigate pages, and zoom.
+Use Find to search PDF text or Word paragraphs.
+Use Edit PDF to select existing text and change its wording.
+Use Scan & OCR to recognize English text on the displayed scanned page.
+Use Add text to type anywhere on a PDF page.
+Use Draw to write or sign with your finger, mouse, or pen.
+Either device can fill supported PDF text fields, checkboxes and dropdowns.
+For Word, choose Edit text and edit an outlined paragraph.
+Text and handwriting sync between the devices.
+Each device controls its own page selection and zoom.
+Save copy saves the current shared result to the device you are using.
+Windows saves its current editing session for recovery on the next launch.
+
+CURRENT LIMITS
+
+The Android app is a companion to the Windows app and needs the PC host.
+This build shares one document at a time and accepts files up to 40 MB.
+Pairing uses a local network address and a code.
+Legacy DOC files use a text view, and edited DOC files save as DOCX.
+DOCX page display supports ordinary layout, tables, images, and styles.
+Word editing currently changes paragraph text.
+Advanced Word formatting and some complex layouts need further work.
+Existing PDF text editing supports horizontal text.
+The original font must contain the replacement characters.
+Text that exceeds the available line width is rejected.
+Scanned text uses an estimated font and should be checked visually.
+Text recognition is currently English.
+Encrypted PDFs and complex form types need further handling.
+Undo mark removes the most recent added text or ink mark on the current page.
+Original-text replacements have no undo control in this build.
+
+VERIFICATION
+
+The focused automated checks passed for PDF font preservation, scanned text
+recognition and replacement, two-way PDF and Word changes, exports from both
+browser clients, handwriting preview, and session recovery.
+The Windows executable passed open, edit, native-save and reopen checks.
+The APK passed signing, alignment, package and minimum-Android checks.
+Installation, file picking, saving, touch behavior, and actual local-network
+pairing on a physical Android phone remain unverified.
+
+SOURCE AND LICENSE
+
+The private repository is https://github.com/Ellesonntseare/Elleson-Docs
+The accompanying source ZIP contains the app sources and build scripts.
+Elleson Docs includes MuPDF.js and is supplied under AGPL-3.0-or-later.
+Dependency licenses are included with the packaged libraries.
+See NOTICE.md and LICENSE for details.
+
+LOGO
+
+The icon was created with the built-in OpenAI image generation tool.
+The design uses a folded document forming an E, in ivory and mint on evergreen.
+The complete prompt is recorded in NOTICE.md in the source archive.
