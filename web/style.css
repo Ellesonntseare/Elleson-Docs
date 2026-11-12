@@ -40,10 +40,11 @@ button[aria-pressed="true"] { background: var(--wash); color: var(--green); bord
 #print-area { display: none; }
 @media print {
   @page { margin: 8mm; }
+  html, body { overflow: visible; }
   body { display: block; height: auto; background: white; }
   body > :not(#print-area) { display: none !important; }
   #print-area { display: block; }
-  #print-area canvas { display: block; width: 100%; height: auto; break-after: page; }
+  #print-area canvas { display: block; width: 100%; height: auto; max-height: 260mm; object-fit: contain; break-inside: avoid; break-after: page; }
   #print-area canvas:last-child { break-after: auto; }
 }
 .pdf-sheet[data-mode="signature"] #ink-canvas { pointer-events: auto; cursor: crosshair; }

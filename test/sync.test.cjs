@@ -93,6 +93,7 @@ test("paired editors exchange real PDF and DOCX changes and export from either c
   await pc.getByRole("button", { name: "Print", exact: true }).click()
   await pc.waitForFunction(() => window.ellesonPrinted === true)
   assert.equal(await pc.locator("#print-area canvas").count(), 2)
+  assert.equal((await PDFDocument.load(await pc.pdf({ format: "A4", preferCSSPageSize: true }))).getPageCount(), 2)
   await pc.getByRole("button", { name: "Page 1", exact: true }).click()
   await pc.getByRole("button", { name: "Edit PDF", exact: true }).click()
   await pc.getByRole("button", { name: "Edit Elleson Docs verification", exact: true }).click()
