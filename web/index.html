@@ -14,34 +14,54 @@
   <header class="app-header">
     <div class="brand"><img src="/logo.png" alt=""><strong>Elleson Docs</strong></div>
     <div id="file-title" class="file-title"></div>
+    <span id="save-state" role="status"></span>
     <div class="actions">
       <button id="open" hidden>Open file</button>
+      <button id="library" hidden>Files</button>
       <button id="connect" hidden>Connect phone</button>
       <button id="find" hidden>Find</button>
       <button id="more-actions" aria-expanded="false" aria-controls="history-actions">More</button>
       <div id="history-actions" class="actions">
         <button id="history-undo" disabled>Undo</button>
         <button id="history-redo" disabled>Redo</button>
+        <label class="flatten-choice"><input id="flatten-copy" type="checkbox"> Fixed PDF copy</label>
+        <button id="scan">Scan document</button>
       </div>
       <button id="save" class="primary" disabled>Save copy</button>
+      <button id="print" disabled>Print</button>
     </div>
     <input id="file" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+    <input id="scan-file" type="file" accept="image/*" capture="environment" hidden>
+    <nav id="document-tabs" aria-label="Open documents" hidden></nav>
+    <select id="mobile-tabs" aria-label="Switch document" hidden></select>
   </header>
   <nav class="toolbar" id="toolbar" aria-label="Document tools" hidden>
     <div class="actions" id="pdf-tools">
       <button data-mode="read" aria-pressed="true">View</button>
       <button data-mode="edit" aria-pressed="false">Edit PDF</button>
       <button id="recognize">Scan &amp; OCR</button>
+      <select id="ocr-language" aria-label="Text recognition language"><option value="eng">English</option><option value="fra">French</option><option value="spa">Spanish</option></select>
       <button data-mode="text" aria-pressed="false">Add text</button>
       <button data-mode="pen" aria-pressed="false">Draw</button>
+      <button data-mode="highlight" aria-pressed="false">Highlight</button>
+      <button data-mode="erase" aria-pressed="false">Erase mark</button>
+      <button id="signature">Signature</button>
+      <button id="organize">Organize pages</button>
+      <label class="ink-setting">Ink <input id="ink-color" type="color" value="#093352" aria-label="Ink color"></label>
+      <label class="ink-setting">Width <select id="ink-width"><option value="1">Fine</option><option value="2" selected>Medium</option><option value="4">Thick</option><option value="8">Wide</option></select></label>
       <button id="undo" disabled>Undo mark</button>
     </div>
     <div class="actions" id="word-tools" hidden>
       <button data-mode="read" aria-pressed="true">View</button>
       <button data-mode="word" aria-pressed="false">Edit text</button>
+      <button id="format-paragraph" disabled>Format paragraph</button>
+      <button id="insert-table" disabled>Insert table</button>
+      <button id="insert-image" disabled>Insert image</button>
+      <input id="word-image-file" type="file" accept="image/png,image/jpeg" hidden>
     </div>
     <div class="actions page-tools" id="page-tools">
       <button id="sidebar-toggle" aria-expanded="true" aria-controls="pages">Pages</button>
+      <button id="bookmarks">Bookmarks</button>
       <button id="prev" aria-label="Previous page">‹</button>
       <label class="page-index"><input id="page" type="number" aria-label="Page number" min="1" value="1"> <span id="total"></span></label>
       <button id="next" aria-label="Next page">›</button>
@@ -98,6 +118,25 @@
     </form>
     <form method="dialog"><button>Close</button></form>
   </dialog>
+  <dialog id="library-dialog">
+    <h2>Documents</h2>
+    <div id="library-list" class="library-list"></div>
+    <form method="dialog"><button>Close</button></form>
+  </dialog>
+  <dialog id="bookmarks-dialog">
+    <h2>Bookmarks</h2>
+    <p>Saved pages stay on this device. Page numbers may change when you organize a PDF.</p>
+    <button id="bookmark-add">Bookmark this page</button>
+    <div id="bookmark-list" class="library-list"></div>
+    <h3>Document outline</h3>
+    <div id="outline-list" class="library-list"></div>
+    <form method="dialog"><button>Close</button></form>
+  </dialog>
+  <dialog id="versions-dialog">
+    <h2>Saved versions</h2>
+    <div id="versions-list" class="library-list"></div>
+    <form method="dialog"><button>Close</button></form>
+  </dialog>
   <dialog id="text-dialog">
     <h2>Add text</h2>
     <form id="add-text">
@@ -111,8 +150,61 @@
     <p id="original-font"></p>
     <form id="replace-text">
       <label>Replacement text <textarea id="replacement" rows="4" maxlength="2000"></textarea></label>
+      <label>Font <select id="replacement-font"><option value="">Keep original font</option><option>Helvetica</option><option>Times-Roman</option><option>Courier</option></select></label>
+      <button type="button" id="preview-replacement">Preview change</button>
+      <p id="replacement-error" role="alert"></p>
+      <img id="replacement-preview" alt="Preview of the edited PDF page" hidden>
       <div class="actions"><button type="button" id="cancel-replace">Cancel</button><button class="primary">Apply edit</button></div>
     </form>
   </dialog>
+  <dialog id="signature-dialog">
+    <h2>Write your signature</h2>
+    <label>Saved signatures <select id="saved-signatures"><option value="">New signature</option></select></label>
+    <canvas id="signature-pad" width="900" height="300" aria-label="Signature writing area"></canvas>
+    <div class="actions">
+      <button id="signature-clear">Clear</button>
+      <label class="flatten-choice"><input id="signature-remember" type="checkbox"> Save for reuse on this device</label>
+      <label>Width <select id="signature-width"><option value="100">Small</option><option value="180" selected>Medium</option><option value="260">Large</option></select></label>
+    </div>
+    <div class="actions"><button id="signature-cancel">Cancel</button><button id="signature-insert" class="primary">Place signature</button></div>
+  </dialog>
+  <dialog id="pages-dialog">
+    <h2>Organize pages</h2>
+    <p id="pages-current"></p>
+    <div class="actions"><button id="rotate-page">Rotate page</button><button id="delete-page">Delete page</button></div>
+    <label>Page order or selection, separated by commas <input id="page-order" placeholder="1, 2, 3"></label>
+    <div class="actions"><button id="reorder-pages">Apply page order</button><button id="extract-pages">Extract selected pages</button></div>
+    <button id="combine-pages">Combine another PDF as fixed pages</button>
+    <input id="combine-file" type="file" accept=".pdf,application/pdf" hidden>
+    <form method="dialog"><button>Close</button></form>
+  </dialog>
+  <dialog id="scan-dialog">
+    <h2>Prepare scan</h2>
+    <img id="scan-preview" alt="Document photo">
+    <label>Straighten <input id="scan-angle" type="range" min="-15" max="15" value="0" step="0.5"><output id="scan-angle-value">0°</output></label>
+    <div class="actions"><button id="scan-cancel">Cancel</button><button id="scan-create" class="primary">Create PDF</button></div>
+  </dialog>
+  <dialog id="word-format-dialog">
+    <h2>Format selected paragraph</h2>
+    <form id="word-format-form">
+      <label>Font <input id="word-font" maxlength="80" placeholder="Keep original font" list="word-fonts"></label>
+      <datalist id="word-fonts"><option>Arial</option><option>Calibri</option><option>Times New Roman</option><option>Georgia</option><option>Courier New</option></datalist>
+      <label>Size in points <input id="word-size" type="number" min="6" max="96" step="0.5" placeholder="Keep original size"></label>
+      <label>Weight <select id="word-bold"><option value="">Keep original</option><option value="true">Bold</option><option value="false">Regular</option></select></label>
+      <label>Style <select id="word-italic"><option value="">Keep original</option><option value="true">Italic</option><option value="false">Upright</option></select></label>
+      <label>Alignment <select id="word-align"><option value="">Keep original</option><option value="left">Left</option><option value="center">Center</option><option value="right">Right</option><option value="both">Justify</option></select></label>
+      <label>List <select id="word-list"><option value="">Keep original</option><option value="none">No list</option><option value="bullet">Bullets</option><option value="decimal">Numbered</option></select></label>
+      <div class="actions"><button type="button" id="word-format-cancel">Cancel</button><button class="primary">Apply formatting</button></div>
+    </form>
+  </dialog>
+  <dialog id="table-dialog">
+    <h2>Insert table after selected paragraph</h2>
+    <form id="table-form">
+      <label>Rows <input id="table-rows" type="number" min="1" max="20" value="3" required></label>
+      <label>Columns <input id="table-columns" type="number" min="1" max="10" value="2" required></label>
+      <div class="actions"><button type="button" id="table-cancel">Cancel</button><button class="primary">Insert table</button></div>
+    </form>
+  </dialog>
+  <div id="print-area" aria-hidden="true"></div>
 </body>
 </html>

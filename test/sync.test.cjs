@@ -6,7 +6,7 @@ const { Document, Paragraph, Packer } = require("docx")
 const { readWord } = require("../word.cjs")
 const { start } = require("../server.cjs")
 
-test("paired editors exchange real PDF and DOCX changes and export from either client", { timeout: 90000 }, async t => {
+test("paired editors exchange real PDF and DOCX changes and export from either client", { timeout: 120000 }, async t => {
   const host = await start()
   t.after(() => host.server.close())
   const browser = await chromium.launch({ channel: "msedge" })
@@ -79,7 +79,7 @@ test("paired editors exchange real PDF and DOCX changes and export from either c
     return state.document.id
   }, host.owner)
   for (const client of [pc, phone]) {
-    const downloadPromise = client.waitForEvent("download").catch(async error => {
+    const downloadPromise = client.waitForEvent("download", { timeout: 30000 }).catch(async error => {
       throw new Error(await client.locator("#status").textContent(), { cause: error })
     })
     await client.getByRole("button", { name: "Save copy" }).click()
@@ -89,6 +89,10 @@ test("paired editors exchange real PDF and DOCX changes and export from either c
     assert.equal(reopened.getPageCount(), 2)
   }
   assert.equal((await host.exportFile(documentId)).filename, "review - copy.pdf")
+  await pc.evaluate(() => { window.print = () => { window.ellesonPrinted = true } })
+  await pc.getByRole("button", { name: "Print", exact: true }).click()
+  await pc.waitForFunction(() => window.ellesonPrinted === true)
+  assert.equal(await pc.locator("#print-area canvas").count(), 2)
   await pc.getByRole("button", { name: "Page 1", exact: true }).click()
   await pc.getByRole("button", { name: "Edit PDF", exact: true }).click()
   await pc.getByRole("button", { name: "Edit Elleson Docs verification", exact: true }).click()
@@ -115,7 +119,7 @@ test("paired editors exchange real PDF and DOCX changes and export from either c
   scanPage.drawImage(bitmap, { x: 20, y: 200, width: 250, height: 250 })
   await host.open("scan.pdf", Buffer.from(await scanned.save()))
   for (const client of [pc, phone]) {
-    await client.getByText("scan.pdf", { exact: true }).waitFor()
+    await client.locator("#file-title").getByText("scan.pdf", { exact: true }).waitFor()
     await client.getByText("PDF ready", { exact: true }).waitFor()
     assert.equal(await client.locator("#pdf-canvas").evaluate(canvas => canvas.width > 100), true)
   }

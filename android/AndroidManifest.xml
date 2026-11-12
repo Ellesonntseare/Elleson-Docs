@@ -1,16 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-  package="za.co.elleson.docs" android:versionCode="1" android:versionName="0.1.0">
+  package="za.co.elleson.docs" android:versionCode="2" android:versionName="0.2.0">
   <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
   <uses-permission android:name="android.permission.INTERNET" />
   <application android:label="Elleson Docs" android:icon="@drawable/elleson_docs"
     android:usesCleartextTraffic="true" android:allowBackup="false"
     android:theme="@android:style/Theme.Material.Light.NoActionBar">
-    <activity android:name=".MainActivity" android:exported="true" android:configChanges="orientation|screenSize|keyboardHidden"
+    <provider android:name=".CameraFileProvider" android:authorities="za.co.elleson.docs.camera"
+      android:exported="false" android:grantUriPermissions="true" />
+    <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTop" android:configChanges="orientation|screenSize|keyboardHidden"
       android:windowSoftInputMode="adjustResize">
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:scheme="content" />
+        <data android:mimeType="application/pdf" />
+        <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+      </intent-filter>
+      <intent-filter>
+        <action android:name="android.intent.action.SEND" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <data android:mimeType="application/pdf" />
+        <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
       </intent-filter>
     </activity>
   </application>

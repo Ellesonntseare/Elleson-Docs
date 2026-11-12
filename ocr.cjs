@@ -1,9 +1,13 @@
 const { createWorker } = require("tesseract.js")
 const language = require("@tesseract.js-data/eng")
+const languages = {
+  eng: language, fra: require("@tesseract.js-data/fra"), spa: require("@tesseract.js-data/spa")
+}
 
-async function recognize(image, scale, bounds) {
-  const worker = await createWorker("eng", 1, {
-    langPath: language.langPath, gzip: true, cacheMethod: "none", errorHandler() {}
+async function recognize(image, scale, bounds, code = "eng") {
+  if (!languages[code]) throw new Error("Choose a supported recognition language.")
+  const worker = await createWorker(code, 1, {
+    langPath: languages[code].langPath, gzip: true, cacheMethod: "none", errorHandler() {}
   })
   try {
     const { data } = await worker.recognize(image, {}, { blocks: true })

@@ -20,13 +20,17 @@ function Invoke-Build([string]$Program, [string[]]$Arguments) {
 $drawable = (New-Item -ItemType Directory -Force "$stage/res/drawable").FullName
 $classes = (New-Item -ItemType Directory "$stage/classes").FullName
 $dex = (New-Item -ItemType Directory "$stage/dex").FullName
+Invoke-Build 'node' @("$repo/scripts/build-offline.mjs")
+Copy-Item -LiteralPath "$repo/.build/android-assets" -Destination "$stage/assets" -Recurse
 Invoke-Build 'python' @('-c', 'from PIL import Image; import sys; Image.open(sys.argv[1]).resize((192, 192), Image.Resampling.LANCZOS).save(sys.argv[2])', "$repo/web/logo.png", "$drawable/elleson_docs.png")
 Invoke-Build "$BuildTools/aapt2.exe" @('compile', '--dir', "$stage/res", '-o', "$stage/res.zip")
 Invoke-Build "$BuildTools/aapt2.exe" @('link', '--manifest', "$repo/android/AndroidManifest.xml", '--min-sdk-version', '26', '--target-sdk-version', '35', '-I', $AndroidJar, '-o', "$stage/unsigned.apk", "$stage/res.zip")
-Invoke-Build "$Jdk/bin/javac.exe" @('--release', '8', '-cp', $AndroidJar, '-d', $classes, "$repo/android/MainActivity.java")
+$javaSources = @(Get-ChildItem -LiteralPath "$repo/android" -Filter '*.java' | Select-Object -ExpandProperty FullName)
+Invoke-Build "$Jdk/bin/javac.exe" (@('--release', '8', '-cp', $AndroidJar, '-d', $classes) + $javaSources)
 $javaClasses = @(Get-ChildItem -LiteralPath $classes -Recurse -Filter '*.class' | Select-Object -ExpandProperty FullName)
 Invoke-Build "$BuildTools/d8.bat" (@('--min-api', '26', '--lib', $AndroidJar, '--output', $dex) + $javaClasses)
 Invoke-Build "$Jdk/bin/jar.exe" @('uf', "$stage/unsigned.apk", '-C', $dex, 'classes.dex')
+Invoke-Build "$Jdk/bin/jar.exe" @('uf', "$stage/unsigned.apk", '-C', $stage, 'assets')
 Invoke-Build "$BuildTools/zipalign.exe" @('-f', '-P', '16', '4', "$stage/unsigned.apk", "$stage/aligned.apk")
 
 $key = Join-Path $build 'elleson-docs-sideload.p12'

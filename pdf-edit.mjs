@@ -1,4 +1,5 @@
 import * as mupdf from "mupdf"
+const toBytes = value => typeof Buffer !== "undefined" ? Buffer.from(value) : Uint8Array.from(value)
 
 function pointTransform([x, y], matrix) {
   return [x * matrix[0] + y * matrix[2] + matrix[4], x * matrix[1] + y * matrix[3] + matrix[5]]
@@ -55,7 +56,7 @@ export function extract(bytes, index, ocr = []) {
   return result
 }
 
-export function replace(bytes, index, spanId, before, value, ocrRun) {
+export function replace(bytes, index, spanId, before, value, ocrRun, fontName) {
   const document = new mupdf.PDFDocument(bytes)
   const page = document.loadPage(index)
   const { structured, spans } = readSpans(page)
@@ -66,22 +67,30 @@ export function replace(bytes, index, spanId, before, value, ocrRun) {
       origin: [ocrRun.rect[0], ocrRun.rect[3] - ocrRun.size * .18]
     } : spans[spanId]
     if (!run || run.text !== before) throw new Error("The selected text changed. Select it again.")
-    if (run.direction[0] < .99 || Math.abs(run.direction[1]) > .01) throw new Error("This text has a rotated baseline. Use Add text for this area.")
+    if (fontName && !["Helvetica", "Times-Roman", "Courier"].includes(fontName)) throw new Error("Choose a supported replacement font.")
+    if (fontName) run.font = new mupdf.Font(fontName)
     const widths = Array.from(value, char => {
       const glyph = run.font.encodeCharacter(char.codePointAt(0))
       if (!glyph && char.trim()) throw new Error("The original font has no glyph for “" + char + "”. Choose text that this font supports.")
       return run.font.advanceGlyph(glyph) * run.size
     })
     const bounds = page.getBounds()
+    const horizontal = run.direction[0] > .99 && Math.abs(run.direction[1]) < .01
     const right = Math.min(bounds[2] - 6, ...spans.filter(other =>
       other !== run && other.rect[0] > run.rect[2] + 1 && other.rect[1] < run.rect[3] && other.rect[3] > run.rect[1]
     ).map(other => other.rect[0] - 3))
-    if (run.origin[0] + widths.reduce((sum, width) => sum + width, 0) > right) {
+    const [dx, dy] = run.direction
+    const limits = []
+    if (Math.abs(dx) > .001) limits.push(((dx > 0 ? bounds[2] - 6 : bounds[0] + 6) - run.origin[0]) / dx)
+    if (Math.abs(dy) > .001) limits.push(((dy > 0 ? bounds[3] - 6 : bounds[1] + 6) - run.origin[1]) / dy)
+    const available = horizontal ? right - run.origin[0] : Math.min(...limits)
+    if (widths.reduce((sum, width) => sum + width, 0) > available) {
       throw new Error("The new text exceeds the available space at the original font size. Shorten it to keep the layout.")
     }
     redaction = page.createAnnotation("Redact")
     const inset = ocrRun ? -1 : Math.min(run.size * .25, (run.rect[3] - run.rect[1]) * .2)
-    redaction.setRect([run.rect[0], run.rect[1] + inset, run.rect[2], run.rect[3] - inset])
+    if (!horizontal && run.quads) redaction.setQuadPoints(run.quads)
+    else redaction.setRect([run.rect[0], run.rect[1] + inset, run.rect[2], run.rect[3] - inset])
     redaction.update()
     redaction.applyRedaction(0, ocrRun ? mupdf.PDFPage.REDACT_IMAGE_PIXELS : mupdf.PDFPage.REDACT_IMAGE_NONE,
       mupdf.PDFPage.REDACT_LINE_ART_NONE, mupdf.PDFPage.REDACT_TEXT_REMOVE)
@@ -90,7 +99,7 @@ export function replace(bytes, index, spanId, before, value, ocrRun) {
     writer = new mupdf.DocumentWriter(overlayBuffer, "pdf", "")
     device = writer.beginPage(bounds)
     text = new mupdf.Text()
-    text.showString(run.font, [run.size, 0, 0, -run.size, ...run.origin], value)
+    text.showString(run.font, [run.size * dx, run.size * dy, run.size * dy, -run.size * dx, ...run.origin], value)
     device.fillText(text, mupdf.Matrix.identity, mupdf.ColorSpace.DeviceRGB, run.color, 1)
     writer.endPage()
     writer.close()
@@ -122,10 +131,10 @@ export function replace(bytes, index, spanId, before, value, ocrRun) {
     list.push(document.addStream("q " + transform.join(" ") + " cm /" + name + " Do Q", {}))
     object.put("Contents", list)
     const output = document.saveToBuffer("garbage=1,compress")
-    const result = Buffer.from(output.asUint8Array())
+    const result = toBytes(output.asUint8Array())
     output.destroy()
     overlayPage.destroy()
-    if (ocrRun) run.font.destroy()
+    if (ocrRun || fontName) run.font.destroy()
     return result
   } finally {
     text?.destroy()
@@ -145,9 +154,88 @@ export function scanImage(bytes, index) {
   const bounds = page.getBounds()
   const scale = Math.min(2, Math.sqrt(9000000 / ((bounds[2] - bounds[0]) * (bounds[3] - bounds[1]))))
   const bitmap = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false, false)
-  const image = Buffer.from(bitmap.asPNG())
+  const image = toBytes(bitmap.asPNG())
   bitmap.destroy()
   page.destroy()
   document.destroy()
   return { image, scale, bounds }
+}
+
+export function imageInfo(bytes) {
+  const type = bytes[0] === 137 && bytes[1] === 80 ? "png" : bytes[0] === 255 && bytes[1] === 216 ? "jpeg" : null
+  if (!type) throw new Error("Choose a PNG or JPEG image.")
+  const image = new mupdf.Image(bytes)
+  try { return { type, width: image.getWidth(), height: image.getHeight() } }
+  finally { image.destroy() }
+}
+
+export function organize(bytes, action, pages, extra) {
+  const document = new mupdf.PDFDocument(bytes)
+  let incoming
+  const arrange = order => {
+    const root = document.getTrailer().get("Root", "Pages")
+    const objects = order.map(index => document.findPage(index))
+    const widgets = new Set()
+    const key = object => object.isIndirect() ? "ref-" + object.asIndirect() : "direct-" + object.resolve().pointer
+    const children = document.newArray()
+    for (const object of objects) {
+      for (const name of ["Resources", "MediaBox", "CropBox", "Rotate"]) {
+        const inherited = object.getInheritable(name)
+        if (!inherited.isNull()) object.put(name, inherited)
+      }
+      object.put("Parent", root)
+      children.push(object)
+      const annotations = object.get("Annots")
+      if (!annotations.isNull()) annotations.forEach(annotation => {
+        if (annotation.get("Subtype").asName() === "Widget") widgets.add(key(annotation))
+      })
+    }
+    root.put("Kids", children)
+    root.put("Count", objects.length)
+    const fields = document.getTrailer().get("Root", "AcroForm", "Fields")
+    const retain = field => {
+      const kids = field.get("Kids")
+      if (!kids.isNull() && kids.length) {
+        const remaining = document.newArray()
+        kids.forEach(child => { if (retain(child)) remaining.push(child) })
+        field.put("Kids", remaining)
+        return remaining.length > 0
+      }
+      return field.get("Subtype").asName() !== "Widget" || widgets.has(key(field))
+    }
+    if (!fields.isNull()) {
+      const remaining = document.newArray()
+      fields.forEach(field => { if (retain(field)) remaining.push(field) })
+      document.getTrailer().get("Root", "AcroForm").put("Fields", remaining)
+    }
+  }
+  try {
+    const count = document.countPages()
+    if (action === "combine") {
+      document.bake(true, true)
+      incoming = new mupdf.PDFDocument(extra)
+      incoming.bake(true, true)
+      for (let index = 0; index < incoming.countPages(); index++) document.graftPage(-1, incoming, index)
+    } else {
+      if (!Array.isArray(pages) || !pages.length || new Set(pages).size !== pages.length ||
+          pages.some(index => !Number.isInteger(index) || index < 0 || index >= count)) throw new Error("Choose valid, unique page numbers.")
+      if (action === "rotate") {
+        for (const index of pages) {
+          const object = document.findPage(index)
+          object.put("Rotate", (object.getInheritable("Rotate").asNumber() + 90) % 360)
+        }
+      } else if (action === "delete") {
+        const remaining = Array.from({ length: count }, (_, index) => index).filter(index => !pages.includes(index))
+        if (!remaining.length) throw new Error("Keep at least one page.")
+        arrange(remaining)
+      } else if (action === "reorder" || action === "extract") {
+        if (action === "reorder" && pages.length !== count) throw new Error("Include every page once in the new order.")
+        arrange(pages)
+      } else throw new Error("Choose a page action.")
+    }
+    const buffer = document.saveToBuffer("garbage=1,compress")
+    const result = { bytes: toBytes(buffer.asUint8Array()), pages: document.countPages() }
+    buffer.destroy()
+    return result
+  } finally { incoming?.destroy(); document.destroy() }
 }

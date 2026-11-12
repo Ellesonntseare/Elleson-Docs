@@ -2,7 +2,8 @@ function capture(document) {
   return {
     bytes: document.bytes, pages: document.pages,
     marks: structuredClone(document.marks), fields: { ...document.fields },
-    wordEdits: { ...document.wordEdits }, ocr: structuredClone(document.ocr)
+    wordEdits: { ...document.wordEdits }, wordFormats: structuredClone(document.wordFormats || {}),
+    word: document.word, extension: document.extension, filename: document.filename, ocr: structuredClone(document.ocr)
   }
 }
 

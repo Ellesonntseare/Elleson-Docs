@@ -3,3 +3,5 @@ dist/
 .build/
 *.apk
 *.p12
+web/offline-runtime.mjs
+web/scan-runtime.mjs

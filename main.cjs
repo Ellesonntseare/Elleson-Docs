@@ -8,9 +8,16 @@ let window
 let host
 let pending = process.argv.find(value => /\.(pdf|docx?)$/i.test(value))
 
-async function openDocument(filename) {
+async function openDocument(filename, confirmed = false) {
   if (!filename || !host) return
   try {
+    const current = host.getDocument()
+    if (!confirmed && current?.dirty) {
+      const decision = await dialog.showMessageBox(window, { type: "question", buttons: ["Cancel", "Replace document"],
+        defaultId: 0, cancelId: 0, title: "Unsaved changes", message: "Replace " + current.filename + "?",
+        detail: "Choose Cancel to save a copy before opening the new document." })
+      if (decision.response !== 1) return
+    }
     if ((await fs.stat(filename)).size > host.maxBytes) throw new Error("Choose a file smaller than 40 MB.")
     await host.open(path.basename(filename), await fs.readFile(filename))
   } catch (error) {
@@ -44,14 +51,16 @@ else {
         properties: ["openFile"],
         filters: [{ name: "PDF and Word documents", extensions: ["pdf", "doc", "docx"] }]
       })
-      await openDocument(selection.filePaths[0])
+      await openDocument(selection.filePaths[0], true)
     })
-    ipcMain.handle("save-document", async (event, id) => {
+    ipcMain.handle("save-document", async (event, id, options) => {
       if (event.sender !== window.webContents) return false
-      const { filename, bytes } = await host.exportFile(id)
+      const exported = await host.exportFile(id, { flatten: options?.flatten === true })
+      const { filename, bytes, changeNumber } = exported
       const result = await dialog.showSaveDialog(window, { defaultPath: filename })
       if (result.canceled) return false
       await fs.writeFile(result.filePath, bytes)
+      await host.markSaved(id, changeNumber, exported)
       return true
     })
     await window.loadURL(host.address + "/#owner=" + host.owner)

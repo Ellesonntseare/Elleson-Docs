@@ -1,13 +1,14 @@
 {
   "name": "elleson-docs",
-  "version": "0.1.1",
-  "description": "Windows document viewer and paired Android editor",
+  "version": "0.2.0",
+  "description": "Windows and Android document viewer and editor with live two-way editing",
   "main": "main.cjs",
   "scripts": {
-    "test": "node --test",
+    "test": "node --test --test-concurrency=1",
     "start": "electron .",
     "serve": "node server.cjs",
-    "build:windows": "node scripts/build-windows.mjs"
+    "build:windows": "node scripts/build-windows.mjs",
+    "pretest": "node scripts/build-offline.mjs"
   },
   "repository": {
     "type": "git",
@@ -23,6 +24,8 @@
   "homepage": "https://github.com/Ellesonntseare/Elleson-Docs",
   "dependencies": {
     "@tesseract.js-data/eng": "1.0.0",
+    "@tesseract.js-data/fra": "1.0.0",
+    "@tesseract.js-data/spa": "1.0.0",
     "@xmldom/xmldom": "0.9.12",
     "diff": "9.0.0",
     "docx": "9.15.3",
@@ -38,6 +41,7 @@
   "devDependencies": {
     "@electron/packager": "20.3.0",
     "electron": "45.3.0",
+    "esbuild": "0.28.2",
     "playwright": "1.65.0"
   },
   "productName": "Elleson Docs",

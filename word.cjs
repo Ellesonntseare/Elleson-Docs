@@ -39,10 +39,12 @@ async function readWord(bytes, extension) {
   return { archive, document, runs, lines }
 }
 
-async function saveWord(source, edits) {
+async function saveWord(source, edits, formats = {}, table, image) {
   if (!source.archive) {
     const children = source.lines.map((line, index) => new Paragraph(edits[index] ?? line.text))
-    return Packer.toBuffer(new Document({ sections: [{ children }] }))
+    const converted = await Packer.toBuffer(new Document({ sections: [{ children }] }))
+    if (!Object.keys(formats).length && !table && !image) return converted
+    return saveWord(await readWord(converted, "docx"), {}, formats, table, image)
   }
   const cloned = source.document.cloneNode(true)
   const originalNodes = Array.from(source.document.getElementsByTagName("*")).filter(node => node.localName === "t")
@@ -69,8 +71,15 @@ async function saveWord(source, edits) {
       nodes[run].setAttributeNS(xmlNamespace, "xml:space", "preserve")
     }
   }
-  const xml = new XMLSerializer().serializeToString(cloned)
-  return zipSync({ ...source.archive, [documentPart]: strToU8(xml) }, { level: 3 })
+  const { applyFormatting, ensureListParts, insertTable, insertImage } = await import("./word-format.mjs")
+  const archive = { ...source.archive }
+  const hasLists = Object.values(formats).some(format => ["bullet", "decimal"].includes(format.list))
+  const listIds = hasLists ? ensureListParts(archive, DOMParser, XMLSerializer, strFromU8, strToU8, cloned.documentElement.namespaceURI) : {}
+  applyFormatting(cloned, formats, listIds)
+  if (table) insertTable(cloned, table.index, table.rows, table.columns)
+  if (image) insertImage(cloned, archive, image, DOMParser, XMLSerializer, strFromU8, strToU8)
+  archive[documentPart] = strToU8(new XMLSerializer().serializeToString(cloned))
+  return zipSync(archive, { level: 3 })
 }
 
 module.exports = { readWord, saveWord }

@@ -1,80 +1,53 @@
-ELLESON DOCS 0.1.1
+ELLESON DOCS 0.2.0
 
 WINDOWS
+Extract the complete Windows ZIP. Run Elleson Docs.exe.
+Install.cmd adds shortcuts and Windows Open with registration.
+Open file accepts PDF, DOC and DOCX.
 
-Extract the entire Windows ZIP to a folder.
-Run Elleson Docs.exe from that folder.
-For desktop and Start menu shortcuts, run Install.cmd.
-Open file lets you choose a PDF, DOC, or DOCX.
-You can also drag a document onto Elleson Docs.exe.
+ANDROID
+Install Elleson-Docs-0.2.0.apk on Android 8 or newer.
+Choose Open documents on phone for independent PDF and DOCX use.
+For live editing, keep Windows open and put both devices on the same Wi-Fi.
+Choose Connect phone on Windows, then enter its address and pairing code
+in Android. Either device can open and save the shared document.
+To transfer independent phone edits, save them on the phone, connect,
+and open that saved file from the phone.
 
-PHONE
+TOOLS
+View, search, thumbnails, bookmarks, document outlines and zoom.
+Edit PDF changes existing text. Preview a change before applying it.
+Original-font edits require available glyphs and room on the line.
+Scan & OCR recognizes English, French or Spanish on a PDF page.
+Scan document converts a photo into PDF, with manual straightening.
+Add text, Draw, Highlight, Erase mark and Signature work on PDF pages.
+Signatures use a larger pad, reusable device storage and placement sizes.
+Organize pages rotates, deletes, reorders, extracts and combines pages.
+Combination creates fixed pages, retaining visible answers and annotations.
+Word Edit text enables paragraph edits. Select a paragraph to format fonts,
+size, bold/italic, alignment or lists, or insert a table or image.
+Save copy exports a separate file. Fixed PDF copy flattens form fields.
+Print prepares current content for the system print workflow.
+Files contains recent documents, pins and saved versions.
+Tabs reopen saved files. One document is shared live at a time.
+The latest editing session recovers after restarting.
 
-Install Elleson-Docs-0.1.0.apk on an Android 8 or newer phone.
-Keep the Windows app running.
-Connect both devices to the same Wi-Fi.
-On the PC, choose Connect phone.
-Enter one of the displayed PC addresses in the Android app.
-Enter the temporary pairing code.
-If Windows displays a firewall prompt, allow the app on your private network.
-
-WORKING WITH DOCUMENTS
-
-Open file is available on both devices after pairing.
-An opened file becomes the shared document.
-Use View to read a PDF, select and copy text, navigate pages, and zoom.
-Use Find to search PDF text or Word paragraphs.
-Use Edit PDF to select existing text and change its wording.
-Use Scan & OCR to recognize English text on the displayed scanned page.
-Use Add text to type anywhere on a PDF page.
-Use Draw to write or sign with your finger, mouse, or pen.
-Either device can fill supported PDF text fields, checkboxes and dropdowns.
-For Word, choose Edit text and edit an outlined paragraph.
-Text and handwriting sync between the devices.
-Each device controls its own page selection and zoom.
-Save copy saves the current shared result to the device you are using.
-Windows saves its current editing session for recovery on the next launch.
-
-CURRENT LIMITS
-
-The Android app is a companion to the Windows app and needs the PC host.
-This build shares one document at a time and accepts files up to 40 MB.
-Pairing uses a local network address and a code.
-Legacy DOC files use a text view, and edited DOC files save as DOCX.
-DOCX page display supports ordinary layout, tables, images, and styles.
-Word editing currently changes paragraph text.
-Advanced Word formatting and some complex layouts need further work.
-Existing PDF text editing supports horizontal text.
-The original font must contain the replacement characters.
-Text that exceeds the available line width is rejected.
-Scanned text uses an estimated font and should be checked visually.
-Text recognition is currently English.
-Encrypted PDFs and complex form types need further handling.
-Undo mark removes the most recent added text or ink mark on the current page.
-Undo and Redo in the header cover document changes in the current session.
-Undo history holds up to 50 changes, subject to its memory limit.
-Opening another document or restarting clears undo history.
-
-VERIFICATION
-
-The focused automated checks passed for PDF font preservation, scanned text
-recognition and replacement, two-way PDF and Word changes, exports from both
-browser clients, handwriting preview, and session recovery.
-The Windows executable passed open, edit, native-save and reopen checks.
-The APK passed signing, alignment, package and minimum-Android checks.
-Installation, file picking, saving, touch behavior, and actual local-network
-pairing on a physical Android phone remain unverified.
+LIMITS
+Files must be smaller than 40 MB. Standalone Android supports PDF and DOCX.
+Legacy DOC needs Windows and edited exports use DOCX.
+Complex Word layouts, protected PDFs and some forms/fonts are unsupported.
+OCR text uses an estimated font and needs visual checking.
+Bookmarks and saved signatures stay on the device.
+Advanced table editing and image resize handles are not included.
+Erase and replace a signature to change its placement or size.
+Local pairing uses HTTP, intended for a trusted local network.
+Saved versions consume local storage. Export important files separately.
+Physical Android camera, installation, touch, saving, networking and
+physical printers still require hands-on validation.
 
 SOURCE AND LICENSE
-
-The private repository is https://github.com/Ellesonntseare/Elleson-Docs
-The accompanying source ZIP contains the app sources and build scripts.
-Elleson Docs includes MuPDF.js and is supplied under AGPL-3.0-or-later.
-Dependency licenses are included with the packaged libraries.
-See NOTICE.md and LICENSE for details.
-
-LOGO
-
-The icon was created with the built-in OpenAI image generation tool.
-The design uses a folded document forming an E, in ivory and mint on evergreen.
-The complete prompt is recorded in NOTICE.md in the source archive.
+https://github.com/Ellesonntseare/Elleson-Docs
+The matching source ZIP contains app code and build scripts.
+Read README.md for capabilities, limitations and development steps.
+Elleson Docs includes MuPDF.js and uses AGPL-3.0-or-later.
+See NOTICE.md and LICENSE for dependency and logo details.

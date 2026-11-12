@@ -1,0 +1,32 @@
+const { test } = require("node:test")
+const assert = require("node:assert/strict")
+const fs = require("node:fs/promises")
+const path = require("node:path")
+const { Document, Paragraph, Packer } = require("docx")
+const { readWord, saveWord } = require("../word.cjs")
+
+test("Word formatting, lists, tables and images are saved without changing the source", async () => {
+  const original = await Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph("Original"), new Paragraph("Keep this paragraph")] }] }))
+  const source = await readWord(original, "docx")
+  const edited = await saveWord(source, { 0: "Edited" }, {
+    0: { font: "Georgia", size: 18, bold: true, italic: true, align: "center", list: "bullet" }
+  }, { index: 0, rows: 2, columns: 2 })
+  const reopened = await readWord(edited, "docx")
+  assert.equal(reopened.lines[0].text, "Edited")
+  assert.ok(reopened.lines.some(line => line.text === "Keep this paragraph"))
+  const namespace = reopened.document.documentElement.namespaceURI
+  assert.equal(reopened.document.getElementsByTagNameNS(namespace, "tbl").length, 1)
+  assert.equal(reopened.document.getElementsByTagNameNS(namespace, "b")[0].getAttributeNS(namespace, "val"), "1")
+  assert.equal(reopened.document.getElementsByTagNameNS(namespace, "sz")[0].getAttributeNS(namespace, "val"), "36")
+  assert.ok(reopened.archive["word/numbering.xml"])
+  assert.equal(source.lines[0].text, "Original")
+  assert.equal(source.document.getElementsByTagNameNS(namespace, "tbl").length, 0)
+  const imageBytes = await fs.readFile(path.join(__dirname, "../web/logo.png"))
+  const withImage = await saveWord(reopened, {}, {}, undefined, { index: 0, bytes: imageBytes, type: "png", width: 1254, height: 1254 })
+  const imaged = await readWord(withImage, "docx")
+  assert.equal(imaged.document.getElementsByTagNameNS(namespace, "drawing").length, 1)
+  assert.equal(imaged.document.getElementsByTagNameNS(namespace, "tbl").length, 1)
+  const images = Object.keys(imaged.archive).filter(name => name.startsWith("word/media/"))
+  assert.equal(images.length, 1)
+  assert.deepEqual(Buffer.from(imaged.archive[images[0]]), imageBytes)
+})

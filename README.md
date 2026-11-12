@@ -1,36 +1,50 @@
 # Elleson Docs
 
-Elleson Docs 0.1.1 is an initial Windows document viewer and editor with a paired Android companion.
+Elleson Docs 0.2.0 is a Windows and Android document viewer and editor. Android can open PDF and DOCX files independently, or connect to Windows for live two-way editing over local Wi-Fi. In a paired session, either device can open and save the shared document. Each device controls its own page and zoom.
 
-Open a PDF, scanned PDF, DOC, or DOCX on the PC. Pair the phone over the same local Wi-Fi using the PC address and a temporary code. Either device can open a new file, fill supported PDF fields, add text, draw, edit supported existing PDF text, edit Word paragraphs, and save a copy. Page selection and zoom belong to each device independently.
+## Included features
 
-## Current capabilities
+- PDF pages, selectable text, search, thumbnails, zoom, device bookmarks and embedded document outline navigation.
+- Existing PDF text editing with original font, size, color and baseline, including rotated text. Preview replacements or explicitly choose a fallback font.
+- Ordinary PDF text fields, checkboxes and single-choice dropdowns. Add text, handwriting, colored ink and highlights.
+- A larger signature pad, reusable device signatures and three placement sizes. Erase marks or complete signatures. Undo and redo document changes.
+- Camera/photo-to-PDF conversion with manual straightening. Local English, French and Spanish OCR, with bundled language data on both platforms.
+- Rotate, delete, reorder and extract PDF pages. Combine documents as fixed pages, preserving visible answers and annotations.
+- DOCX paragraph editing with existing text-run formatting retained. Paragraph fonts, sizes, bold, italic, alignment and lists. Insert tables and PNG/JPEG images.
+- Windows legacy DOC text viewing and editing, with edited exports converted to DOCX.
+- Recent documents, pinning, document tabs, saved versions and session recovery.
+- Save-state indicators, confirmations before replacing unsaved work, ordinary and fixed PDF exports, and a print workflow.
 
-- PDF page rendering, page thumbnails, zoom, selectable text, and document search.
-- Existing PDF text replacement with the extracted font, size, color, and baseline. Replacement characters must exist in the font. The app rejects a replacement that exceeds the available line width.
-- English OCR runs locally using bundled language data. Recognized lines on a scan can be replaced with an estimated Helvetica font. Scan editing can change pixels around a selected line.
-- Fill ordinary text fields, checkboxes, and single-choice dropdowns. Add text and ink to any PDF page and export those changes.
-- DOCX page display includes layout, images, tables, and styles through docx-preview. Edit paragraph text while retaining the Word XML parts and distributing changes across existing runs.
-- Legacy DOC files open in a text view. Edited legacy documents save as DOCX.
-- Save copies on Windows through a native save dialog and on Android through the system document picker.
-- The Windows application automatically recovers its last document session from its user-data directory.
+## Use
 
-## Current limits
+Extract the complete Windows ZIP and run Elleson Docs.exe. Install.cmd adds desktop and Start menu shortcuts and registers supported types in Windows Open with. It does not change default applications automatically.
 
-This build handles one shared document at a time, with an upload limit of 40 MB. Android requires the Windows host to remain running. Pairing uses an address and code over local HTTP. Phone camera QR pairing and independent Android offline editing remain future work.
+Install the APK on Android 8 or newer. Choose Open documents on phone for independent use. Android Open with and Share accept PDF and DOCX files from other apps. For live editing, keep Windows running, put both devices on the same Wi-Fi, choose Connect phone on Windows, then enter the displayed address and temporary pairing code in Android. Local phone documents and the PC session are separate. To bring an independently edited phone document into a PC session, save it on the phone, connect, and open that saved copy from the phone.
 
-Word editing currently changes paragraph text. Advanced Word formatting, tracked changes, and fully faithful rendering of every Office feature need further implementation. PDF editing is limited to horizontal text. Unavailable characters, text with a rotated baseline, encrypted documents, complex PDF form types, and some unusual font encodings need further handling. OCR recognition and scan font estimation require visual review.
+Files contains recent documents, pins and saved versions. Desktop tabs and the phone document selector reopen saved files. Switching away from unsaved work asks for confirmation. Save copy writes a separate file. A saved version is a document snapshot, while Undo and Redo operate on editing history.
 
-Shared Undo and Redo restore PDF text replacements, form fields, handwriting, annotations and Word paragraph changes during the current session. The history holds up to 50 changes with a memory limit. Opening another document or restarting clears undo history. Session recovery retains the latest edited document, and Save copy creates a separate document file.
+## Scope and limits
 
-The APK has been compiled, signed and structurally verified. Browser tests cover desktop and a mobile viewport. Physical Android installation, handwriting latency, native file-picking and saving, and real phone-to-PC networking require device validation.
+Files must be smaller than 40 MB. One document is shared live at a time. Tabs reopen saved versions rather than keeping multiple simultaneous editing sessions. Pairing uses a temporary code over local HTTP, intended for a trusted local network.
 
-## Development
+Standalone Android supports PDF and DOCX and requires a recent Android System WebView. Legacy DOC requires the Windows host. Connecting does not automatically merge the standalone phone document with the PC document.
 
-Use Node.js 24 or later. Run npm ci, then npm start. Run npm test for the focused document, OCR, synchronization, and recovery checks.
+The original PDF font must contain replacement glyphs, and text must fit the available line width. Some unusual font encodings, protected/encrypted PDFs and complex form types remain unsupported. Scans use estimated fonts after OCR and require visual checking. Combining PDFs creates fixed content, so combined form fields are no longer interactive.
 
-Run npm run build:windows to package the Windows application. The optional ELLESON_ELECTRON_ZIP_DIR environment variable selects an existing Electron ZIP directory.
+Word rendering uses docx-preview and is not a complete Microsoft Word layout engine. Advanced Office structures, tracked changes and every complex layout are not fully supported. Formatting applies to the selected paragraph. Images retain aspect ratio, but interactive image resizing and advanced table editing are not included. Moving or resizing an inserted signature requires erasing and placing it again. Bookmarks and reusable signatures are stored per device and are not embedded in exported documents.
 
-The Android build script accepts Jdk, BuildTools, AndroidJar and Output parameters. It uses Android build tools 35, platform 35, Java 17 and Python with Pillow for icon format conversion. The application targets Android 15 with a minimum of Android 8. Its package name is za.co.elleson.docs.
+PC Undo holds up to 50 changes within a 100 MB memory budget and resets on switching documents or restarting. Android retains up to 30 changes in its local session. Saved versions consume local storage independently. Clearing Android app data removes its local documents and versions. Export important files to system storage separately.
 
-See NOTICE.md and LICENSE for dependency licenses and the logo generation prompt. The combined application uses the GNU Affero General Public License, version 3 or later, because it includes MuPDF.js.
+## Verification
+
+Automated checks cover original and rotated PDF text, OCR, form-preserving page operations, fixed exports, revision-aware save state, saved versions, pins, recovery, Word formatting/tables/images, and live two-way PDF and Word changes. A browser harness serves only bundled Android assets to check independent editing, exports and recovery without a PC backend. The Windows executable is checked through actual launch, editing, native saving and reopening.
+
+The APK build verifies compilation, signature, alignment and metadata. Physical Android installation, camera behavior, native saving, touch latency, network interruptions and real printers still require hands-on validation. Browser viewport checks do not establish physical-device behavior.
+
+## Development and license
+
+Use Node.js 24 or later. Run npm ci, npm run pretest, then npm start. Run npm test for automated checks. The pretest step generates browser bundles and Android assets. Browser tests use Edge through Playwright.
+
+Run npm run build:windows to package Windows. ELLESON_ELECTRON_ZIP_DIR optionally selects an existing Electron ZIP directory. scripts/build-android.ps1 takes Jdk, BuildTools, AndroidJar and Output. It requires Java 17, Android build tools/platform 35, Node dependencies and Python with Pillow. Android targets version 15, requires version 8 or later and uses package za.co.elleson.docs.
+
+See NOTICE.md and LICENSE for dependency licenses and the logo prompt. The combined application uses AGPL-3.0-or-later because it includes MuPDF.js. Signing keys, build outputs and dependencies are excluded from Git.
