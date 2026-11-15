@@ -7,7 +7,8 @@ function capture(document) {
   }
 }
 
-function remember(document, before) {
+function remember(document, before, label) {
+  before.historyLabel = label
   document.undo.push(before)
   document.redo = []
   const size = () => {
@@ -24,8 +25,10 @@ function restore(document, direction) {
   const source = document[direction]
   if (!source.length) throw new Error("There are no changes to " + direction + ".")
   const target = direction === "undo" ? document.redo : document.undo
-  target.push(capture(document))
-  Object.assign(document, source.pop())
+  const entry = source.pop()
+  target.push({...capture(document),historyLabel:entry.historyLabel})
+  const {historyLabel,...state}=entry
+  Object.assign(document,state)
   document.contentVersion++
 }
 

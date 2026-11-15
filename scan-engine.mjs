@@ -1,1 +1,1 @@
-export { defaultCorners, detectCorners, prepareImage, imagesToPdf, imageToPdf } from "./scan-tools.mjs"
+export { filteredPdf, defaultCorners, detectCorners, prepareImage, imagesToPdf, imageToPdf } from "./scan-tools.mjs"

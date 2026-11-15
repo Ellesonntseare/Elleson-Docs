@@ -1,3 +1,4 @@
+const { durableWrite } = require('./durable-files.cjs')
 const fs = require("node:fs/promises")
 const path = require("node:path")
 const crypto = require("node:crypto")
@@ -32,9 +33,9 @@ class DocumentLibrary {
   async writeIndex(records) {
     if (!this.directory) return
     await fs.mkdir(this.directory, { recursive: true })
-    await fs.writeFile(path.join(this.directory, "index.tmp"), JSON.stringify(records))
+    await durableWrite(path.join(this.directory, "index.pending.json"), JSON.stringify(records))
     await fs.copyFile(path.join(this.directory, "index.json"), path.join(this.directory, "index.backup.json")).catch(error => { if (error.code !== "ENOENT") throw error })
-    await fs.rename(path.join(this.directory, "index.tmp"), path.join(this.directory, "index.json"))
+    await fs.rename(path.join(this.directory, "index.pending.json"), path.join(this.directory, "index.json"))
   }
   async save(filename, bytes, id = crypto.randomUUID()) {
     const operation = this.queue.then(async () => {
@@ -47,7 +48,7 @@ class DocumentLibrary {
       const records = [...this.records.filter(record => record.id !== id), record]
       if (this.directory) {
         await fs.mkdir(this.directory, { recursive: true })
-        await fs.writeFile(path.join(this.directory, version.id + ".bin"), bytes)
+        await durableWrite(path.join(this.directory, version.id + ".bin"), bytes)
       } else this.memory.set(version.id, Buffer.from(bytes))
       await this.writeIndex(records)
       this.records = records

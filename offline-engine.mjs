@@ -1,8 +1,10 @@
+import { fieldValues, sameValue, validFieldValue, setFieldValue } from './pdf-fields.mjs'
 import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib"
 import { protectPdf } from "./pdf-protection.mjs"
+import { decoratePdf, documentInfo, needsPassword, unlockPdf, redactPdf, extractImages } from "./document-extras.mjs"
 import { unzipSync, zipSync, strFromU8, strToU8 } from "fflate"
 import { extract, replace, organize, scanImage, imageInfo } from "./pdf-edit.mjs"
-import { applyFormatting, ensureListParts, insertTable, insertImage, validFormat } from "./word-format.mjs"
+import { applyFormatting, ensureListParts, insertTable, insertImage, validFormat, changeWordInk, validInkPosition } from "./word-format.mjs"
 import { diffChars } from "diff"
 import { editWord } from "./word-tools.mjs"
 import { changeMarks } from "./mark-tools.mjs"
@@ -63,7 +65,7 @@ export async function install() {
   })
   const snapshot = () => file && ({
     id: file.id, filename: file.filename, extension: file.extension, pages: file.pages,
-    contentVersion: file.contentVersion, marks: file.marks, fields: file.fields, originalFields: file.originalFields || {},
+    contentVersion: file.contentVersion, structureVersion: file.structureVersion || 0, marks: file.marks, fields: file.fields, originalFields: file.originalFields || {},
     saveExtension: file.extension, dirty: file.changeNumber !== file.savedNumber, libraryId: file.libraryId,
     canUndo: file.undo.length > 0, canRedo: file.redo.length > 0,
     lines: file.lines?.map((line, index) => ({ ...line, text: file.wordEdits[index] ?? line.text }))
@@ -125,9 +127,7 @@ export async function install() {
     for (const [name, value] of Object.entries(file.fields)) {
       const field = form.getFieldMaybe(name)
       if (!field) continue
-      if (typeof value === "boolean") value ? field.check() : field.uncheck()
-      else if (typeof field.setText === "function") field.setText(value)
-      else if (typeof field.select === "function") field.select(value)
+      setFieldValue(field, value)
     }
     form.updateFieldAppearances(font)
     for (const mark of file.marks) {
@@ -226,7 +226,12 @@ export async function install() {
       const filename = decodeURIComponent(new Headers(options.headers).get("X-Filename") || "")
       const extension = filename.split(".").pop().toLowerCase()
       if (!["pdf", "docx"].includes(extension)) throw new Error("Standalone mode currently supports PDF and DOCX. Use the PC to open legacy DOC files.")
-      const bytes = new Uint8Array(await options.body.arrayBuffer())
+      let bytes = new Uint8Array(await options.body.arrayBuffer())
+      if(extension==='pdf' && needsPassword(bytes)) {
+        const password=new Headers(options.headers).get('x-pdf-password')
+        if(!password)return Response.json({error:'This PDF needs a password.',passwordRequired:true},{status:422})
+        try{bytes=unlockPdf(bytes,decodeURIComponent(password))}catch(error){return Response.json({error:error.message,passwordRequired:true},{status:422})}
+      }
       if (bytes.length > 40 * 1024 * 1024) throw new Error("Choose a file smaller than 40 MB.")
       const next = {
         id: crypto.randomUUID(), filename, extension, bytes, marks: [], fields: {}, wordEdits: {}, wordFormats: {},
@@ -235,7 +240,7 @@ export async function install() {
       if (extension === "pdf") {
         const pdf = await PDFDocument.load(bytes)
         next.pages = pdf.getPageCount()
-        next.originalFields = Object.fromEntries(pdf.getForm().getFields().map(field => [field.getName(), field.getText?.() ?? field.isChecked?.() ?? field.getSelected?.()?.[0] ?? ""]))
+        next.originalFields = fieldValues(pdf)
       }
       else {
         const archive = unzipSync(bytes, { filter: entry => {
@@ -245,7 +250,7 @@ export async function install() {
         if (!archive["word/document.xml"]) throw new Error("This is not a valid DOCX file.")
         const xml = new DOMParser().parseFromString(strFromU8(archive["word/document.xml"]), "application/xml")
         next.lines = Array.from(xml.getElementsByTagNameNS(xml.documentElement.namespaceURI, "p"), paragraph => {
-          const nodes = Array.from(paragraph.getElementsByTagNameNS(xml.documentElement.namespaceURI, "t"))
+          const nodes = Array.from(paragraph.getElementsByTagNameNS(xml.documentElement.namespaceURI, "t")).filter(node => { let owner = node.parentNode; while (owner && owner.localName !== "p") owner = owner.parentNode; return owner === paragraph })
           return { text: nodes.map(node => node.textContent).join(""), style: "", editable: nodes.length > 0 }
         })
       }
@@ -267,7 +272,7 @@ export async function install() {
     if (action === "pdf-images") return Response.json(images(file.bytes, Number(parts[3]) - 1))
     if (action === "pdf-image") {
       const description = JSON.parse(new Headers(options.headers).get("X-Image-Edit") || "{}")
-      if (file.applied.includes(description.id)) return Response.json(snapshot())
+      if (file.applied.includes(description.id)) { await persist(); return Response.json(snapshot()) }
       if (description.version !== file.contentVersion) throw new Error("Select the page again.")
       const before = capture(file)
       file.bytes = await changeImage(file.bytes, new Uint8Array(await options.body.arrayBuffer()), description)
@@ -278,20 +283,36 @@ export async function install() {
     if (action === "source") return new Response(await source(), { headers: {
       "Content-Type": file.extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     } })
+    if (action === 'word-erase' || action === 'word-ink-edit') {
+      const {id,version,target,position}=JSON.parse(options.body||'{}')
+      if(file.applied.includes(id))return Response.json(snapshot())
+      if(!file.lines||version!==file.contentVersion)return new Response(null,{status:409})
+      const erase=action==='word-erase'
+      if(!/^[a-zA-Z0-9-]{12,80}$/.test(id||'')||typeof target!=='string'||!erase&&!validInkPosition(position))return new Response(null,{status:400})
+      const bytes=changeWordInk(await source(),target,erase?undefined:position)
+      if(!bytes)return new Response(null,{status:404})
+      file.undo.push(capture(file));file.redo=[]
+      file.bytes=bytes;file.wordEdits={};file.wordFormats={}
+      file.contentVersion++;file.changeNumber++;file.applied.push(id);revision++
+      await persist()
+      return Response.json(snapshot())
+    }
     if (action === "word-image") {
       const headers = new Headers(options.headers)
       const operationId = headers.get("X-Operation-Id")
-      if (file.applied.includes(operationId)) return Response.json(snapshot())
+      if (file.applied.includes(operationId)) { await persist(); return Response.json(snapshot()) }
       const index = Number(headers.get("X-Paragraph-Index"))
       if (Number(headers.get("X-Document-Version")) !== file.contentVersion || !file.lines?.[index]) throw new Error("Select the paragraph again.")
       const before = capture(file)
       const bytes = new Uint8Array(await options.body.arrayBuffer())
-      file.bytes = await source(undefined, { ...imageInfo(bytes), bytes, index })
+      const position = headers.get('X-Word-Ink') ? JSON.parse(headers.get('X-Word-Ink')) : undefined
+      file.bytes = await source(undefined, { ...imageInfo(bytes), bytes, index, position })
       file.wordEdits = {}
       file.wordFormats = {}
+      if (!position) file.structureVersion = (file.structureVersion || 0) + 1
       const { document } = wordXml()
       file.lines = Array.from(document.getElementsByTagNameNS(document.documentElement.namespaceURI, "p"), paragraph => {
-        const nodes = Array.from(paragraph.getElementsByTagNameNS(document.documentElement.namespaceURI, "t"))
+        const nodes = Array.from(paragraph.getElementsByTagNameNS(document.documentElement.namespaceURI, "t")).filter(node => { let owner = node.parentNode; while (owner && owner.localName !== "p") owner = owner.parentNode; return owner === paragraph })
         return { text: nodes.map(node => node.textContent).join(""), editable: nodes.length > 0, style: "" }
       })
       file.undo.push(before)
@@ -309,7 +330,8 @@ export async function install() {
         headers: { "Content-Type": "application/pdf" }
       })
     }
-    if (action === "print") return new Response(await exported(true), { headers: { "Content-Type": "application/pdf" } })
+    if (action === "filter-source" && file.extension !== "pdf") return Response.json({error:"Connect to the Windows app to filter Word pages."},{status:422})
+    if (action === "print" || action === "filter-source") return new Response(await exported(true), { headers: { "Content-Type": "application/pdf" } })
     if (action === "text") return Response.json({
       version: file.contentVersion, spans: extract(file.bytes, Number(parts[3]) - 1, file.ocr?.[Number(parts[3]) - 1] || [])
     })
@@ -335,6 +357,14 @@ export async function install() {
     if (action === "protect") {
       if (file.extension !== "pdf") throw new Error("Open a PDF to set its password.")
       return new Response(protectPdf(await exported(false), body.password), { headers: { "Content-Type": "application/pdf" } })
+    }
+    if (action === "info") return Response.json(file.extension === "pdf" ? documentInfo(await exported(false)) : {bytes:(await source()).length,type:file.extension})
+    if(action==='extract-images'){if(file.extension!=='pdf')throw new Error('Open a PDF first.');return new Response(extractImages(await exported(false)),{headers:{'Content-Type':'application/zip'}})}
+    if(action==='redact'){if(file.extension!=='pdf')throw new Error('Open a PDF first.');return new Response(redactPdf(await exported(false),body),{headers:{'Content-Type':'application/pdf'}})}
+    if (action === "decorate") {
+      if (file.extension !== "pdf") throw new Error("Open a PDF first.")
+      if (["header","footer","watermark"].some(key => body[key] && (typeof body[key] !== "string" || body[key].length > 120))) throw new Error("Keep each label under 120 characters.")
+      return new Response(await decoratePdf(await exported(false),body),{headers:{"Content-Type":"application/pdf"}})
     }
     if (action === "ocr") {
       const language = body.lang || "eng"
@@ -372,14 +402,14 @@ export async function install() {
     }
     if (action === "combine") {
       const operationId = new Headers(options.headers).get("X-Operation-Id")
-      if (file.applied.includes(operationId)) return Response.json(snapshot())
+      if (file.applied.includes(operationId)) { await persist(); return Response.json(snapshot()) }
       const before = capture(file)
       const incoming = new Uint8Array(await options.body.arrayBuffer())
       const result = url.searchParams.get("editable") === "1" ? await combineEditable(await exported(false), incoming) : organize(await exported(false), "combine", null, incoming)
       file.undo.push(before)
       file.redo = []
       Object.assign(file, result, { marks: [], fields: {} })
-      file.originalFields = Object.fromEntries((await PDFDocument.load(file.bytes)).getForm().getFields().map(field => [field.getName(), field.getText?.() ?? field.isChecked?.() ?? field.getSelected?.()?.[0] ?? ""]))
+      file.originalFields = fieldValues(await PDFDocument.load(file.bytes))
       file.contentVersion++
       file.changeNumber++
       revision++
@@ -388,7 +418,7 @@ export async function install() {
       return Response.json(snapshot())
     }
     if (action !== "edit") return Response.json({ error: "This action is unavailable offline." }, { status: 400 })
-    if (file.applied.includes(body.id)) return Response.json(snapshot())
+    if (file.applied.includes(body.id)) { await persist(); return Response.json(snapshot()) }
     const before = capture(file)
     if (body.kind === "history-undo" || body.kind === "history-redo") {
       const direction = body.kind === "history-undo" ? "undo" : "redo"
@@ -400,11 +430,12 @@ export async function install() {
       if (body.kind === "pages") {
         if (body.version !== file.contentVersion) throw new Error("The document changed.")
         Object.assign(file, organize(await exported(false), body.action, body.pages), { marks: [], fields: {} })
-        file.originalFields = Object.fromEntries((await PDFDocument.load(file.bytes)).getForm().getFields().map(field => [field.getName(), field.getText?.() ?? field.isChecked?.() ?? field.getSelected?.()?.[0] ?? ""]))
+        file.originalFields = fieldValues(await PDFDocument.load(file.bytes))
         file.contentVersion++
       } else if (body.kind === "field") {
         const actual = file.fields[body.name] ?? file.originalFields?.[body.name] ?? ""
-        if (Object.hasOwn(body, "before") && actual !== body.before) return Response.json({ error: "This field changed.", actual, code: "EDIT_CONFLICT" }, { status: 409 })
+        if (Object.hasOwn(body, "before") && !sameValue(actual, body.before)) return Response.json({ error: "This field changed.", actual, code: "EDIT_CONFLICT" }, { status: 409 })
+        if (!validFieldValue(body.value)) throw new Error("Choose a valid field value.")
         file.fields[body.name] = body.value
       }
       else if (body.kind === "transform") file.marks = changeMarks(file.marks, body)
@@ -420,7 +451,7 @@ export async function install() {
         archive["word/document.xml"] = strToU8(new XMLSerializer().serializeToString(document))
         file.bytes = zipSync(archive)
         file.lines = Array.from(document.getElementsByTagNameNS(document.documentElement.namespaceURI, "p"), paragraph => {
-          const nodes = Array.from(paragraph.getElementsByTagNameNS(document.documentElement.namespaceURI, "t"))
+          const nodes = Array.from(paragraph.getElementsByTagNameNS(document.documentElement.namespaceURI, "t")).filter(node => { let owner = node.parentNode; while (owner && owner.localName !== "p") owner = owner.parentNode; return owner === paragraph })
           return { text: nodes.map(node => node.textContent).join(""), editable: nodes.length > 0, style: "" }
         })
         file.contentVersion++
@@ -438,12 +469,13 @@ export async function install() {
         file.wordFormats = {}
         const { document } = wordXml()
         file.lines = Array.from(document.getElementsByTagNameNS(document.documentElement.namespaceURI, "p"), paragraph => {
-          const nodes = Array.from(paragraph.getElementsByTagNameNS(document.documentElement.namespaceURI, "t"))
+          const nodes = Array.from(paragraph.getElementsByTagNameNS(document.documentElement.namespaceURI, "t")).filter(node => { let owner = node.parentNode; while (owner && owner.localName !== "p") owner = owner.parentNode; return owner === paragraph })
           return { text: nodes.map(node => node.textContent).join(""), editable: nodes.length > 0, style: "" }
         })
         file.contentVersion++
       } else if (body.kind === "word") {
-        if ((file.wordEdits[body.index] ?? file.lines[body.index].text) !== body.before) throw new Error("The paragraph changed. Select it again.")
+        if ((body.structureVersion ?? 0) !== (file.structureVersion || 0)) return Response.json({error:"The paragraph order changed. Your draft is retained for review.",code:"STRUCTURE_CONFLICT"},{status:409})
+        if ((file.wordEdits[body.index] ?? file.lines[body.index].text) !== body.before) return Response.json({ error: "The paragraph changed. Select it again.", code: "EDIT_CONFLICT", actual: file.wordEdits[body.index] ?? file.lines[body.index].text }, {status:409})
         file.wordEdits[body.index] = body.value
         file.contentVersion++
       } else if (body.kind === "replace") {
@@ -464,6 +496,7 @@ export async function install() {
       if (file.undo.length > 30) file.undo.shift()
       file.redo = []
     }
+    if ((["word-table", "history-undo", "history-redo"].includes(body.kind) || body.kind === 'word-tools' && body.action !== 'range') && file.extension === "docx") file.structureVersion = (file.structureVersion || 0) + 1
     file.applied.push(body.id)
     file.changeNumber++
     revision++
@@ -473,7 +506,7 @@ export async function install() {
   window.fetch = (input, options = {}) => {
     const url = new URL(typeof input === "string" ? input : input.url, location.href)
     if (!url.pathname.startsWith("/api/")) return fetchAsset(input, options)
-    const execute = () => handle(url, options).catch(error => Response.json({ error: error.message }, { status: 422 }))
+    const execute = () => handle(url, options).catch(error => Response.json({ error: error?.message || String(error) || 'The operation could not be completed.' }, { status: 422 }))
     if (options.method && options.method !== "GET") {
       const result = queue.then(execute)
       queue = result.catch(() => {})

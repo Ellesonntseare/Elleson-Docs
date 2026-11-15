@@ -1,4 +1,4 @@
-import { PDFDocument } from "pdf-lib"
+import { PDFDocument, StandardFonts } from "pdf-lib"
 import { applyScanFilter } from "./scan-filters.mjs"
 export const defaultCorners = () => [[0, 0], [1, 0], [1, 1], [0, 1]]
 function valid(points) {
@@ -73,3 +73,26 @@ export async function imagesToPdf(pages) {
   return new File([bytes], pages[0].file.name.replace(/\.[^.]+$/, "") + ".pdf", { type: "application/pdf" })
 }
 export const imageToPdf = (file, angle = 0) => imagesToPdf([{ file, angle }])
+
+export async function filteredPdf(bytes,images){
+  const pdf=await PDFDocument.load(bytes)
+  const font=images.some(item=>item.ocr)?await pdf.embedFont(StandardFonts.Helvetica):null
+  for(const item of images){
+    const old=pdf.getPage(item.index),size=old.getSize(),angle=old.getRotation().angle
+    if(angle===90||angle===270)[size.width,size.height]=[size.height,size.width]
+    const image=await pdf.embedPng(await item.blob.arrayBuffer())
+    pdf.removePage(item.index)
+    const page=pdf.insertPage(item.index,[size.width,size.height])
+    page.drawImage(image,{x:0,y:0,width:size.width,height:size.height})
+    for(const block of item.ocr?.blocks||[])for(const paragraph of block.paragraphs||[])for(const line of paragraph.lines||[])for(const word of line.words||[]){
+      const value=word.text?.trim()
+      if(!value)continue
+      try{font.encodeText(value)}catch{continue}
+      const box=word.bbox
+      const sx=size.width/image.width,sy=size.height/image.height
+      const sizePt=Math.max(1,Math.min((box.y1-box.y0)*sy,(box.x1-box.x0)*sx/Math.max(.1,font.widthOfTextAtSize(value,1))))
+      page.drawText(value,{x:box.x0*sx,y:size.height-box.y1*sy,size:sizePt,font,opacity:0})
+    }
+  }
+  return pdf.save()
+}

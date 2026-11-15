@@ -1,3 +1,4 @@
+const { durableWrite } = require('./durable-files.cjs')
 const crypto = require("node:crypto")
 const os = require("node:os")
 const path = require("node:path")
@@ -23,6 +24,7 @@ const downloadMime = {
 }
 
 async function start(port = 0, recoveryDirectory) {
+  const { fieldValues, sameValue, validFieldValue, setFieldValue } = await import('./pdf-fields.mjs')
   const web = express()
   const owner = token()
   const library = new DocumentLibrary(recoveryDirectory ? path.join(recoveryDirectory, "library") : null)
@@ -40,8 +42,11 @@ async function start(port = 0, recoveryDirectory) {
   let recognizing = false
   let checkpointQueue = Promise.resolve()
   let editQueue = Promise.resolve()
+  const wordLayouts = new Map()
   const previews = Object.create(null)
   const pendingExports = new Map()
+  let sharedView = null, viewSequence = 0
+  let wordRenderer
   let handoff
   const isLoopback = request => ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(request.socket.remoteAddress)
   if (recoveryDirectory) {
@@ -52,11 +57,13 @@ async function start(port = 0, recoveryDirectory) {
   web.use((request, response, next) => {
     response.set({
       "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
-      "Content-Security-Policy": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; font-src 'self' data: blob:; connect-src 'self' blob:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+      "Content-Security-Policy": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; worker-src 'self' blob:; font-src 'self' data: blob:; connect-src 'self' blob: https://api.github.com; object-src 'none'; frame-ancestors 'none'; base-uri 'none'"
     })
     if (request.path.startsWith("/api/")) response.set("Cache-Control", "no-store")
     next()
   })
+  const documentFonts = new Set(['arial.ttf','arialbd.ttf','ariali.ttf','arialbi.ttf','calibri.ttf','calibrib.ttf','calibrii.ttf','calibriz.ttf','cambria.ttc','cambriab.ttf','cambriai.ttf','cambriaz.ttf','times.ttf','timesbd.ttf','timesi.ttf','timesbi.ttf','cour.ttf','courbd.ttf','couri.ttf','courbi.ttf'])
+  web.get('/document-fonts/:file',(request,response)=>{if(!documentFonts.has(request.params.file)||process.platform!=='win32')return response.sendStatus(404);response.sendFile(path.join(process.env.WINDIR||'C:\\Windows','Fonts',request.params.file))})
   web.use(express.static(path.join(__dirname, "web")))
   web.use("/vendor/docx", express.static(path.dirname(require.resolve("docx-preview"))))
   web.use("/vendor/jszip", express.static(path.join(path.dirname(require.resolve("jszip/package.json")), "dist")))
@@ -67,7 +74,25 @@ async function start(port = 0, recoveryDirectory) {
   for (const folder of ["legacy/build", "cmaps", "standard_fonts", "wasm"]) {
     web.use("/pdfjs/" + folder, express.static(path.join(pdfRoot, folder)))
   }
-  web.use(express.json({ limit: "384kb" }))
+  web.use(express.json({ limit: "8mb" }))
+  // Only explicitly staged, checksum-described APKs are served to the local network.
+  const updateDirectory = recoveryDirectory ? path.join(path.dirname(recoveryDirectory),'updates') : null
+  web.get('/api/local-update',async(request,response)=>{
+    try {if(!updateDirectory)return response.json(null);const manifest=JSON.parse(await fs.readFile(path.join(updateDirectory,'android.json'),'utf8'));if(!/^sha256:[a-f0-9]{64}$/.test(manifest.digest)||!/^\d+\.\d+\.\d+$/.test(manifest.version))throw Error();response.json({...manifest,url:'/api/local-update/android.apk'})}catch{response.json(null)}
+  })
+  web.get('/api/local-update/android.apk',async(request,response)=>{
+    if(!updateDirectory)return response.sendStatus(404)
+    response.sendFile(path.join(updateDirectory,'android.apk'))
+  })
+  web.post('/api/connect',async(request,response)=>{
+    const address=(request.socket.remoteAddress||'').replace(/^::ffff:/,'')
+    const local=isLoopback(request)||/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(address)
+    if(!local||request.get('X-Elleson-Connect')!=='1')return response.status(403).json({error:'Connect using the same Wi-Fi as the PC.'})
+    if(!mobile||mobileUntil<Date.now()){mobile=token();mobileUntil=Date.now()+30*86400000}
+    lastPhoneSeen=Date.now()
+    if(recoveryDirectory)await durableWrite(path.join(recoveryDirectory,'paired-device.json'),JSON.stringify({token:mobile,until:mobileUntil}))
+    response.json({token:mobile})
+  })
   web.post("/api/pair-request", (request, response) => {
     if (pairRequest && pairRequest.until > Date.now()) return response.status(409).json({ error: "Another connection request is pending. Try again shortly." })
     pairRequest = { id: token(), secret: token(), address: request.socket.remoteAddress, until: Date.now() + 120000, approved: false }
@@ -166,6 +191,7 @@ async function start(port = 0, recoveryDirectory) {
   web.get("/api/state", (request, response) => {
     const unchanged = Number(request.query.revision) === revision
     response.json({
+      view: sharedView?.document === document?.id ? sharedView : null,
       revision, role: request.role, paired: Boolean(mobile) && mobileUntil > Date.now(), phoneOnline: Date.now() - lastPhoneSeen < 6000, recoveryWarning, handoff: handoff?.target === request.role ? handoff : null,
       pairRequest: request.role === "pc" && pairRequest && !pairRequest.approved && pairRequest.until > Date.now() ? { id: pairRequest.id, address: pairRequest.address } : null,
       tabs: [...documents.values()].map(item => ({ id: item.libraryId, documentId: item.id, filename: item.filename, dirty: item.changeNumber !== item.savedNumber })),
@@ -173,6 +199,21 @@ async function start(port = 0, recoveryDirectory) {
         ? previews[request.role === "pc" ? "phone" : "pc"].mark : null,
       ...(unchanged ? {} : { document: document ? snapshot(document) : null })
     })
+  })
+  web.post("/api/view/:id", (request, response) => {
+    if (document?.id !== request.params.id) return response.sendStatus(409)
+    const {client, page, x, y, zoom} = request.body || {}
+    if (typeof client !== 'string' || !/^[a-zA-Z0-9-]{12,80}$/.test(client) || !Number.isInteger(page) || page<1 || page>100000 || ![x,y].every(v=>Number.isFinite(v)&&v>=0&&v<=1) || !Number.isFinite(zoom) || zoom<=0) return response.sendStatus(400)
+    sharedView = {document:document.id,client,page,x,y,zoom,reading:request.body.reading===true, color:/^#[a-f0-9]{6}$/i.test(request.body.color||'')?request.body.color:undefined, thickness:[1,2,4,8].includes(request.body.thickness)?request.body.thickness:undefined,sequence:++viewSequence}
+    response.sendStatus(204)
+  })
+  web.get('/api/word-layout/:id',(request,response)=>{const value=wordLayouts.get(request.params.id);response.json(value?.version===Number(request.query.version)?value:null)})
+  web.post('/api/word-layout/:id',(request,response)=>{
+    if(request.role!=='pc')return response.sendStatus(403)
+    if(document?.id!==request.params.id||request.body.version!==document.contentVersion)return response.sendStatus(409)
+    const pages=request.body.pages
+    if(!Array.isArray(pages)||pages.length>1000||!pages.every(p=>Number.isFinite(p.width)&&Number.isFinite(p.height)&&Array.isArray(p.paragraphs)&&p.paragraphs.every(q=>Number.isInteger(q.index)&&Array.isArray(q.characters)&&q.characters.every(c=>typeof c.text==='string'&&c.text.length<=2&&[c.x,c.y,c.width,c.height].every(Number.isFinite)))))return response.sendStatus(400)
+    wordLayouts.clear();wordLayouts.set(document.id,request.body);response.sendStatus(204)
   })
   web.post("/api/handoff", (request, response) => {
     if (!document) return response.sendStatus(409)
@@ -182,13 +223,15 @@ async function start(port = 0, recoveryDirectory) {
     response.sendStatus(204)
   })
   web.post("/api/preview/:id", (request, response) => {
-    if (document?.id !== request.params.id || document.extension !== "pdf") return response.sendStatus(409)
+    if (document?.id !== request.params.id) return response.sendStatus(409)
     const { page, points, id } = request.body || {}
-    if (!points) {
+    if (!points && request.body?.kind!=='word-ink') {
       delete previews[request.role]
-    } else if (/^[a-zA-Z0-9-]{12,80}$/.test(id || "") && Number.isInteger(page) && page >= 1 && page <= document.pages && Array.isArray(points)
+    } else if (request.body.kind==='word-ink' && document.word && request.body.version===document.contentVersion && /^[a-zA-Z0-9-]{12,80}$/.test(id||'') && Number.isInteger(request.body.index) && document.word.lines[request.body.index] && Number.isInteger(page) && page>=0 && page<1000 && [request.body.width,request.body.height].every(v=>Number.isFinite(v)&&v>0&&v<=5000) && Array.isArray(request.body.strokes) && request.body.strokes.length<=100 && request.body.strokes.reduce((n,s)=>n+(s.points?.length||0),0)<=12000 && request.body.strokes.every(s=>Array.isArray(s.points)&&s.points.length>0&&s.points.every(isPoint))) {
+      if(!document.applied.has(id))previews[request.role]={until:Date.now()+2200,mark:{...request.body,document:document.id}}
+    } else if (document.extension==='pdf' && /^[a-zA-Z0-9-]{12,80}$/.test(id || "") && Number.isInteger(page) && page >= 1 && page <= document.pages && Array.isArray(points)
       && points.length >= 1 && points.length <= 1200 && points.every(isPoint)) {
-      if (!document.applied.has(id)) previews[request.role] = { until: Date.now() + 2200, mark: { kind: "ink", page, points, ...inkStyle(request.body) } }
+      if (!document.applied.has(id)) previews[request.role] = { until: Date.now() + 2200, mark: { id, kind: "ink", page, points, ...inkStyle(request.body) } }
     } else return response.sendStatus(400)
     response.sendStatus(204)
   })
@@ -240,7 +283,17 @@ async function start(port = 0, recoveryDirectory) {
   })
   web.post("/api/open", express.raw({ type: "application/octet-stream", limit: maxBytes }), async (request, response) => {
     if (!Buffer.isBuffer(request.body)) return response.status(400).json({ error: "Choose a document to open." })
-    await open(decodeURIComponent(request.get("x-filename") || ""), request.body)
+    const name=decodeURIComponent(request.get("x-filename") || "")
+    let bytes=request.body
+    if (/\.pdf$/i.test(name)) {
+      const engine=await import('./document-extras.mjs')
+      if(engine.needsPassword(bytes)) {
+        const password=request.get('x-pdf-password')
+        if(!password)return response.status(422).json({error:'This PDF needs a password.',passwordRequired:true})
+        try{bytes=Buffer.from(engine.unlockPdf(bytes,decodeURIComponent(password)))}catch(error){return response.status(422).json({error:error.message,passwordRequired:true})}
+      }
+    }
+    await open(name, bytes)
     response.sendStatus(204)
   })
   web.post("/api/close/:id", (request, response, next) => {
@@ -268,6 +321,12 @@ async function start(port = 0, recoveryDirectory) {
     const extracted = engine.organize(bytes, "extract", pages)
     response.attachment("Selected pages.pdf").type("application/pdf").send(Buffer.from(extracted.bytes))
   })
+  web.get('/api/filter-source/:id',async(request,response)=>{
+    if(document?.id!==request.params.id)return response.sendStatus(404)
+    const result=await exportFile(document.id,{flatten:true})
+    if(document.word){if(!wordRenderer)return response.status(422).json({error:'Connect to the Windows app to filter Word pages.'});return response.type('application/pdf').send(Buffer.from(await wordRenderer(Array.from(result.bytes))))}
+    response.type('application/pdf').send(Buffer.from(result.bytes))
+  })
   web.get("/api/print/:id", async (request, response) => {
     const result = await exportFile(request.params.id, { flatten: true })
     response.type("application/pdf").send(Buffer.from(result.bytes))
@@ -278,7 +337,7 @@ async function start(port = 0, recoveryDirectory) {
       if (current?.id !== request.params.id || current.extension !== "pdf" || !Buffer.isBuffer(request.body)) return response.sendStatus(409)
       const operationId = request.get("X-Operation-Id")
       if (!/^[a-zA-Z0-9-]{12,80}$/.test(operationId || "")) return response.sendStatus(400)
-      if (current.applied.has(operationId)) return response.json(snapshot(current))
+      if (current.applied.has(operationId)) { await checkpoint(); return response.json(snapshot(current)) }
       const before = history.capture(current)
       const engine = await import("./pdf-edit.mjs")
       const exported = await exportFile(current.id)
@@ -288,7 +347,7 @@ async function start(port = 0, recoveryDirectory) {
       current.pages = result.pages
       current.marks = []
       current.fields = Object.create(null)
-      current.originalFields = Object.fromEntries((await PDFDocument.load(current.bytes)).getForm().getFields().map(field => [field.getName(), field instanceof PDFTextField ? field.getText() || "" : field instanceof PDFCheckBox ? field.isChecked() : field instanceof PDFDropdown ? field.getSelected()[0] || "" : ""]))
+      current.originalFields = fieldValues(await PDFDocument.load(current.bytes))
       current.ocr = Object.create(null)
       current.contentVersion++
       current.changeNumber++
@@ -320,7 +379,7 @@ async function start(port = 0, recoveryDirectory) {
     const operation = editQueue.then(async () => {
       const current = documents.get(request.params.id), edit = JSON.parse(request.get("X-Image-Edit") || "{}")
       if (!current || current.extension !== "pdf" || current.contentVersion !== edit.version || !Buffer.isBuffer(request.body)) return response.status(409).json({ error: "Select the page again." })
-      if (current.applied.has(edit.id)) return response.json(snapshot(current))
+      if (current.applied.has(edit.id)) { await checkpoint(); return response.json(snapshot(current)) }
       if (!/^[a-zA-Z0-9-]{12,80}$/.test(edit.id || "")) return response.sendStatus(400)
       const before = history.capture(current)
       current.bytes = await (await import("./pdf-tools.mjs")).image(current.bytes, request.body, edit)
@@ -332,10 +391,11 @@ async function start(port = 0, recoveryDirectory) {
     editQueue = operation.catch(() => {})
     operation.catch(next)
   })
-  async function applyWordBytes(current, bytes) {
+  async function applyWordBytes(current, bytes, structural = true) {
     const word = await readWord(bytes, "docx")
     if (documents.get(current.id) !== current) throw Object.assign(new Error("The open document changed."), { status: 409 })
     current.bytes = Buffer.from(bytes)
+    if (structural) current.structureVersion = (current.structureVersion || 0) + 1
     current.word = word
     current.extension = "docx"
     current.filename = current.filename.replace(/\.doc$/i, ".docx")
@@ -343,21 +403,44 @@ async function start(port = 0, recoveryDirectory) {
     current.wordFormats = Object.create(null)
     current.contentVersion++
   }
+  web.post(['/api/word-erase/:id','/api/word-ink-edit/:id'],(request,response,next)=>{
+    const operation=editQueue.then(async()=>{
+      const current=document,{id,version,target,position}=request.body||{}
+      if(!/^[a-zA-Z0-9-]{12,80}$/.test(id||'')||typeof target!=='string')return response.sendStatus(400)
+      if(current?.id!==request.params.id||!current.word)return response.sendStatus(409)
+      if(current.applied.has(id)){await checkpoint();return response.json(snapshot(current))}
+      if(version!==current.contentVersion)return response.status(409).json({error:'The document changed. Select the drawing again.'})
+      const erase=request.path.startsWith('/api/word-erase/')
+      const {changeWordInk,validInkPosition}=await import('./word-format.mjs')
+      if(!erase&&!validInkPosition(position))return response.status(400).json({error:'The drawing position is invalid.'})
+      const before=history.capture(current)
+      const bytes=changeWordInk(await saveWord(current.word,current.wordEdits,current.wordFormats),target,erase?undefined:position)
+      if(!bytes)return response.sendStatus(404)
+      await applyWordBytes(current,bytes,false)
+      history.remember(current,before,erase?'erased stroke':'drawing edit')
+      current.changeNumber++;current.applied.add(id);revision++
+      await checkpoint()
+      response.json(snapshot(current))
+    })
+    editQueue=operation.catch(()=>{});operation.catch(next)
+  })
   web.post("/api/word-image/:id", express.raw({ type: "application/octet-stream", limit: maxBytes }), (request, response, next) => {
     const operation = editQueue.then(async () => {
       const current = document
       const index = Number(request.get("X-Paragraph-Index"))
       const operationId = request.get("X-Operation-Id")
       if (current?.id !== request.params.id || !current.word || !Buffer.isBuffer(request.body)) return response.sendStatus(409)
-      if (current.applied.has(operationId)) return response.json(snapshot(current))
+      if (current.applied.has(operationId)) { await checkpoint(); return response.json(snapshot(current)) }
       if (!Number.isInteger(index) || !current.word.lines[index] || !/^[a-zA-Z0-9-]{12,80}$/.test(operationId || "") ||
         Number(request.get("X-Document-Version")) !== current.contentVersion) return response.status(409).json({ error: "Select the paragraph again." })
       const before = history.capture(current)
       const engine = await import("./pdf-edit.mjs")
-      const image = { ...engine.imageInfo(request.body), bytes: request.body, index }
+      const position = request.get('X-Word-Ink') ? JSON.parse(request.get('X-Word-Ink')) : undefined
+      const image = { ...engine.imageInfo(request.body), bytes: request.body, index, position }
       const bytes = await saveWord(current.word, current.wordEdits, current.wordFormats, undefined, image)
-      await applyWordBytes(current, bytes)
-      history.remember(current, before)
+      await applyWordBytes(current, bytes, !position)
+      for(const role of Object.keys(previews))if(previews[role].mark?.id===operationId)delete previews[role]
+      history.remember(current, before,position?'drawing stroke':'image insertion')
       current.changeNumber++
       current.applied.add(operationId)
       revision++
@@ -372,7 +455,7 @@ async function start(port = 0, recoveryDirectory) {
     if (!current || current.id !== request.params.id) return response.status(409).json({ error: "The open document changed." })
     const edit = request.body
     if (!edit || !/^[a-zA-Z0-9-]{12,80}$/.test(edit.id ?? "")) return response.sendStatus(400)
-    if (current.applied.has(edit.id)) return response.json(snapshot(current))
+    if (current.applied.has(edit.id)) { await checkpoint(); return response.json(snapshot(current)) }
     if (current.applied.size >= 30000) throw new Error("Save a copy and reopen it to continue editing.")
     const before = history.capture(current)
     if (edit.kind === "history-undo" || edit.kind === "history-redo") {
@@ -386,7 +469,7 @@ async function start(port = 0, recoveryDirectory) {
       current.pages = result.pages
       current.marks = []
       current.fields = Object.create(null)
-      current.originalFields = Object.fromEntries((await PDFDocument.load(current.bytes)).getForm().getFields().map(field => [field.getName(), field instanceof PDFTextField ? field.getText() || "" : field instanceof PDFCheckBox ? field.isChecked() : field instanceof PDFDropdown ? field.getSelected()[0] || "" : ""]))
+      current.originalFields = fieldValues(await PDFDocument.load(current.bytes))
       current.ocr = Object.create(null)
       current.contentVersion++
     } else if (edit.kind === "replace" && current.extension === "pdf" && edit.version === current.contentVersion
@@ -407,7 +490,7 @@ async function start(port = 0, recoveryDirectory) {
       const { strFromU8, strToU8, zipSync } = require("fflate")
       ;(await import("./word-tools.mjs")).editWord(parsed.document, parsed.archive, edit, DOMParser, XMLSerializer, strFromU8, strToU8)
       parsed.archive["word/document.xml"] = strToU8(new XMLSerializer().serializeToString(parsed.document))
-      await applyWordBytes(current, Buffer.from(zipSync(parsed.archive)))
+      await applyWordBytes(current, Buffer.from(zipSync(parsed.archive)), edit.action !== 'range')
     } else if (edit.kind === "review" && current.extension === "pdf") {
       if (edit.version !== current.contentVersion) throw Object.assign(new Error("The page changed. Review the latest page."), { status: 409 })
       current.bytes = (await import("./pdf-tools.mjs")).review(current.bytes, edit)
@@ -430,14 +513,18 @@ async function start(port = 0, recoveryDirectory) {
       })
       await applyWordBytes(current, bytes)
     } else if (edit.kind === "word" && current.word?.lines[edit.index]?.editable && typeof edit.value === "string" && edit.value.length <= 16000) {
+      if ((edit.structureVersion ?? 0) !== (current.structureVersion || 0)) return response.status(409).json({ error: "The paragraph order changed. Your draft is retained; review it before applying to the latest document.", code: "STRUCTURE_CONFLICT" })
       const existing = current.wordEdits[edit.index] ?? current.word.lines[edit.index].text
       if (existing !== edit.before) return response.status(409).json({ error: "This paragraph changed on the other device.", code: "EDIT_CONFLICT", actual: existing })
       current.wordEdits[edit.index] = edit.value
       current.contentVersion++
-    } else if (edit.kind === "field" && current.extension === "pdf" && typeof edit.name === "string" && edit.name.length <= 300 && (typeof edit.value === "boolean" || typeof edit.value === "string" && edit.value.length <= 2000)) {
+    } else if (edit.kind === "field" && current.extension === "pdf" && typeof edit.name === "string" && edit.name.length <= 300 && validFieldValue(edit.value)) {
       const actual = current.fields[edit.name] ?? current.originalFields?.[edit.name] ?? ""
-      if (Object.hasOwn(edit, "before") && edit.before !== actual) return response.status(409).json({ error: "This field changed on the other device.", code: "EDIT_CONFLICT", actual })
-      if (typeof edit.value === "string") (await latinFont).encodeText(edit.value)
+      if (Object.hasOwn(edit, "before") && !sameValue(edit.before, actual)) return response.status(409).json({ error: "This field changed on the other device.", code: "EDIT_CONFLICT", actual })
+      const field = (await PDFDocument.load(current.bytes)).getForm().getFieldMaybe(edit.name)
+      if (!field) throw new Error("This PDF field no longer exists.")
+      setFieldValue(field, edit.value)
+      if (field instanceof PDFTextField && typeof edit.value === "string") (await latinFont).encodeText(edit.value)
       current.fields[edit.name] = edit.value
     } else if (edit.kind === "undo" && typeof edit.target === "string" && current.extension === "pdf") {
       const group = current.marks.find(mark => mark.id === edit.target)?.group
@@ -456,7 +543,11 @@ async function start(port = 0, recoveryDirectory) {
         current.marks.push({ id: edit.id, page: edit.page, kind: "text", at: edit.at, angle: edit.angle, size: edit.size, value: edit.value })
       } else return response.status(400).json({ error: "This change could not be applied." })
     } else return response.status(400).json({ error: "This change could not be applied." })
-    if (edit.kind !== "history-undo" && edit.kind !== "history-redo") history.remember(current, before)
+    if (edit.kind !== "history-undo" && edit.kind !== "history-redo") {
+      const labels={word:'text edit',replace:'text replacement',field:'form edit',ink:'drawing stroke',signature:'signature',undo:'erased mark',pages:'page change',text:'added text'}
+      history.remember(current,before,labels[edit.kind]||'document edit')
+    }
+    if (["history-undo", "history-redo"].includes(edit.kind) && current.word) current.structureVersion = (current.structureVersion || 0) + 1
     current.applied.add(edit.id)
     current.changeNumber++
     revision++
@@ -482,6 +573,25 @@ async function start(port = 0, recoveryDirectory) {
       const { protectPdf } = await import("./pdf-protection.mjs")
       response.type("application/pdf").send(Buffer.from(protectPdf(exported.bytes, request.body.password)))
     } catch (error) { response.status(400).json({ error: error.message }) }
+  })
+  web.post("/api/decorate/:id", async (request, response) => {
+    try {
+      const exported = await exportFile(request.params.id)
+      if (exported.extension !== "pdf") throw new Error("Open a PDF first.")
+      const options = request.body
+      if (["header","footer","watermark"].some(key => options[key] && (typeof options[key] !== "string" || options[key].length > 120))) throw new Error("Keep each label under 120 characters.")
+      response.type("application/pdf").send(Buffer.from(await (await import("./document-extras.mjs")).decoratePdf(exported.bytes, options)))
+    } catch (error) { response.status(400).json({error:error.message}) }
+  })
+  web.get("/api/info/:id", async (request, response) => {
+    const exported = await exportFile(request.params.id)
+    response.json(exported.extension === "pdf" ? (await import("./document-extras.mjs")).documentInfo(exported.bytes) : {bytes:exported.bytes.length,type:exported.extension})
+  })
+  web.get('/api/extract-images/:id',async(request,response)=>{
+    try{const exported=await exportFile(request.params.id);if(exported.extension!=='pdf')throw new Error('Open a PDF first.');response.type('application/zip').send(Buffer.from((await import('./document-extras.mjs')).extractImages(exported.bytes)))}catch(error){response.status(400).json({error:error.message})}
+  })
+  web.post('/api/redact/:id',async(request,response)=>{
+    try{const exported=await exportFile(request.params.id);if(exported.extension!=='pdf')throw new Error('Open a PDF first.');response.type('application/pdf').send(Buffer.from((await import('./document-extras.mjs')).redactPdf(exported.bytes,request.body)))}catch(error){response.status(400).json({error:error.message})}
   })
   web.post("/api/rename/:id", async (request, response) => {
     try { await renameDocument(request.params.id, request.body.name); response.json(snapshot(document)) }
@@ -539,7 +649,7 @@ async function start(port = 0, recoveryDirectory) {
   async function checkpoint() {
     if (!recoveryDirectory) return
     const entries = [...documents.values()].map(current => ({ current, bytes: current.bytes, metadata: {
-      id: current.id, filename: current.filename, source: current.id + "-" + current.contentVersion + ".bin", contentVersion: current.contentVersion, libraryId: current.libraryId,
+      id: current.id, filename: current.filename, source: current.id + "-" + current.contentVersion + ".bin", contentVersion: current.contentVersion, structureVersion: current.structureVersion || 0, libraryId: current.libraryId,
       fields: { ...current.fields }, wordEdits: { ...current.wordEdits }, wordFormats: structuredClone(current.wordFormats), marks: structuredClone(current.marks),
       ocr: structuredClone(current.ocr), applied: [...current.applied], changeNumber: current.changeNumber, savedNumber: current.savedNumber
     } }))
@@ -549,13 +659,12 @@ async function start(port = 0, recoveryDirectory) {
       for (const entry of entries) {
         const target = path.join(recoveryDirectory, entry.metadata.source)
         try { await fs.access(target) } catch {
-          await fs.writeFile(target + ".tmp", entry.bytes)
-          await fs.rename(target + ".tmp", target)
+          await durableWrite(target, entry.bytes)
         }
       }
-      await fs.writeFile(path.join(recoveryDirectory, "workspace.tmp"), metadata)
+      await durableWrite(path.join(recoveryDirectory, "workspace.pending.json"), metadata)
       await fs.copyFile(path.join(recoveryDirectory, "workspace.json"), path.join(recoveryDirectory, "workspace.backup.json")).catch(error => { if (error.code !== "ENOENT") throw error })
-      await fs.rename(path.join(recoveryDirectory, "workspace.tmp"), path.join(recoveryDirectory, "workspace.json"))
+      await fs.rename(path.join(recoveryDirectory, "workspace.pending.json"), path.join(recoveryDirectory, "workspace.json"))
       // Retain the previous workspace's sources as well, so its recovery index remains usable.
       let backup = []
       try { backup = JSON.parse(await fs.readFile(path.join(recoveryDirectory, "workspace.backup.json"), "utf8")).documents || [] } catch {}
@@ -567,10 +676,11 @@ async function start(port = 0, recoveryDirectory) {
 
   function snapshot(current) {
     return {
-      id: current.id, filename: current.filename, extension: current.extension, pages: current.pages, contentVersion: current.contentVersion,
+      id: current.id, filename: current.filename, extension: current.extension, pages: current.pages, contentVersion: current.contentVersion, structureVersion: current.structureVersion || 0,
       saveExtension: current.extension === "doc" && (Object.keys(current.wordEdits).length || Object.keys(current.wordFormats).length) ? "docx" : current.extension,
       marks: current.marks, fields: current.fields, originalFields: current.originalFields || {},
       canUndo: current.undo.length > 0, canRedo: current.redo.length > 0,
+      undoLabel:current.undo.at(-1)?.historyLabel,redoLabel:current.redo.at(-1)?.historyLabel,
       dirty: current.changeNumber !== current.savedNumber, libraryId: current.libraryId,
       lines: current.word?.lines.map((line, index) => ({ ...line, text: current.wordEdits[index] ?? line.text }))
     }
@@ -594,7 +704,7 @@ async function start(port = 0, recoveryDirectory) {
     if (extension === "pdf") {
       const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false })
       next.pages = pdf.getPageCount()
-      next.originalFields = Object.fromEntries(pdf.getForm().getFields().map(field => [field.getName(), field instanceof PDFCheckBox ? field.isChecked() : field instanceof PDFTextField ? field.getText() || "" : field instanceof PDFDropdown ? field.getSelected()[0] || "" : ""]))
+      next.originalFields = fieldValues(pdf)
     } else next.word = await readWord(bytes, extension)
     if (order !== openSequence) throw new Error("A newer file was selected.")
     try { next.libraryId = existingLibraryId || (restoring ? undefined : await library.save(filename, bytes)) }
@@ -645,9 +755,8 @@ async function start(port = 0, recoveryDirectory) {
         const form = pdf.getForm()
         for (const [name, value] of fields) {
           const field = form.getFieldMaybe(name)
-          if (field instanceof PDFTextField && typeof value === "string") field.setText(value)
-          if (field instanceof PDFCheckBox && typeof value === "boolean") value ? field.check() : field.uncheck()
-          if (field instanceof PDFDropdown && typeof value === "string") field.select(value)
+          if (!field) throw new Error("This PDF field no longer exists.")
+          setFieldValue(field, value)
         }
         form.updateFieldAppearances(font)
       }
@@ -676,7 +785,7 @@ async function start(port = 0, recoveryDirectory) {
     current.filename = name.trim(); revision++; await checkpoint()
   }
   return { server, owner, address: "http://127.0.0.1:" + server.address().port, maxBytes, open, exportFile, markSaved, renameDocument,
-    getDocument: () => document ? snapshot(document) : null }
+    setWordRenderer: renderer=>{wordRenderer=renderer}, getDocument: () => document ? snapshot(document) : null }
 }
 
 module.exports = { start }

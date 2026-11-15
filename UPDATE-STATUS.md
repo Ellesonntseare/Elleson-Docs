@@ -1,4 +1,53 @@
-# Elleson Docs update — 13 November 2026
+# Elleson Docs 0.4.10
+
+- Open PNG, JPEG, WebP, GIF and BMP from the standard file picker or the operating system. Pictures open as one-page working PDFs. File > Save as PDF writes a separate PDF and preserves the source picture.
+- Windows uses the redesigned editor shell. Scroll with the mouse wheel and hold Ctrl to zoom around the cursor. Right-click a page, title, tab or saved file for document actions.
+- Tap saved PDF or Word ink to edit it. An Android client can download signed updates from the PC over Wi-Fi.
+- GIF import uses a single frame. The Android build still needs a physical-device check.
+
+Verification: The full automated run passed 58 of 59 tests. The remaining Word selection test passed after waiting for the editor to finish rendering. Native Windows checks passed opening, editing, saving, reopening, external-change protection, mouse-wheel navigation and PNG-to-PDF export. Android 0.4.10 compiled and passed APK signature and alignment verification; physical-device behavior remains unverified.
+
+## Elleson Docs 0.4.0
+
+- Shared page-relative viewport: phone and PC follow scroll, page and zoom in both directions. Remote movement is suppressed from echoing back.
+- Pinch navigation works in Word viewing/editing, PDF viewing/editing, continuous reading and the signature pad. Fixed zoom caps were removed. Rendering resolution remains bounded to protect canvas memory.
+- Drawing settings expose pen colour and thickness for Word/PDF and signing, retain selections and share them with the connected view.
+- Android document text scaling is fixed at 100 percent to preserve alignment with page-relative ink.
+- Physical Android installation and network behavior remain to be checked on a device.
+
+## Earlier build additions
+
+- Word drawing previews stream to the other connected device before pen-up. Completed strokes automatically embed into the same shared DOCX, including strokes queued during an earlier upload. Save writes the external file.
+- Two-finger zoom works over Word ink and the signature pad without leaving stray strokes. Signature Undo responds directly to touch taps. Ink uses smoothed paths, and new incoming writing briefly fades in without fading out existing content.
+- Android permits the exact GitHub release API needed by the updater; network failures give a useful message. A published newer release is still required for update availability.
+- Physical Android installation, discovery, camera and file-provider checks remain outstanding.
+
+## Preview 3 additions
+
+- Word pages preserve their natural dimensions and scale to the viewport, with fit-width and zoom controls. Document paragraph styling is isolated from generic app paragraph spacing.
+- Word opens in editing mode. Selectable PDF text opens its editing control directly; form fields stay interactive.
+- Edit > Draw / sign records touch strokes over Word pages. Save drawing embeds transparent PNG ink as an anchored drawing inside the DOCX. Draft strokes are retained on the device before upload. Save writes the external file.
+- Same-Wi-Fi clients connect using the local connection route without codes or approval. Android selects the first discovered PC and remembers its address. The previous pairing routes remain for compatibility.
+- More > Check for updates checks published GitHub releases. Android verifies the checksum, package identity, newer version and signing certificate before opening Android installation. Windows downloads and verifies an update ZIP for extraction; it does not silently replace running program files.
+- Physical Android discovery, file-provider saving, update installation and camera behavior remain unverified.
+
+### Earlier preview 2 notes
+
+The app-wide review findings have been addressed in source and packaged for Windows x64 and Android. This remains a preview; physical Android camera, file-provider saving, Wi-Fi interruption, and printer behavior still require device checks.
+
+- Input drafts are stored locally before the typing debounce, overlaid while offline, and reconciled after reload. Completed host edits are checkpointed before acknowledgement. File replacements flush a temporary file before publishing it. Save still explicitly writes the original file; recovery storage protects work between saves.
+- Stale Word paragraph edits are rejected after structural changes, retained locally, and offered for manual placement. Paragraph splits move objects instead of duplicating them; unsupported tracked-change/field/content-control splits are rejected before changing the document.
+- Word selection formatting follows the active paragraph and selection. Paragraph alignment/list/spacing applies when words are selected. Paragraph ownership excludes nested textboxes consistently on Windows and standalone Android.
+- PDF radio buttons and choice lists, including multiple selections, are editable and exported with their values. Continuous reading retries after a temporary failure.
+- Captured scans survive failed creation and reload. Resume captured scan reopens the retained draft; successful creation or explicit Cancel clears it.
+- Android retains original and pending private recovery copies before writing an external file. Native file-provider and sudden power-loss behavior still need physical-device validation.
+- Built Windows Word-to-PDF conversion produced a readable PDF with a table; its rendered page was visually inspected. This is not a guarantee of arbitrary Microsoft Word layout fidelity.
+
+The dated notes below describe the earlier preview checkpoint. The final test evidence and current limitations are supplied with the fixed build.
+
+---
+
+## Earlier update - 13 November 2026
 
 This is an in-progress update, not a claim that every requested improvement is complete.
 

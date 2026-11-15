@@ -1,4 +1,5 @@
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron")
+const { durableWrite } = require('./durable-files.cjs')
 const fs = require("node:fs/promises")
 const path = require("node:path")
 const { start } = require("./server.cjs")
@@ -6,8 +7,11 @@ if (process.env.ELLESON_DOCS_USER_DATA) app.setPath("userData", process.env.ELLE
 
 let window
 let host
-let pending = process.argv.find(value => /\.(pdf|docx?)$/i.test(value))
+let quitting = false
+app.on('before-quit', () => { quitting = true })
+let pending = process.argv.find(value => /\.(pdf|docx?|png|jpe?g|webp|gif|bmp)$/i.test(value))
 const originalFiles = new Map()
+let lockedDocument
 const hashBytes = bytes => require("node:crypto").createHash("sha256").update(bytes).digest("hex")
 const fingerprint = async filename => hashBytes(await fs.readFile(filename))
 async function rememberOriginalFiles() {
@@ -20,7 +24,25 @@ async function openDocument(filename, confirmed = false) {
   filename = path.resolve(filename)
   try {
     if ((await fs.stat(filename)).size > host.maxBytes) throw new Error("Choose a file smaller than 40 MB.")
-    const bytes = await fs.readFile(filename), opened = await host.open(path.basename(filename), bytes)
+    const bytes = await fs.readFile(filename)
+    if (/\.pdf$/i.test(filename) && (await import('./document-extras.mjs')).needsPassword(bytes)) {
+      lockedDocument={filename,bytes}
+      window.webContents.send('pdf-password-needed',path.basename(filename)); return
+    }
+    const {pictureType}=await import('./web/picture-import.mjs')
+    if(pictureType(filename)){
+      const data=JSON.stringify(bytes.toString('base64'))
+      const name=JSON.stringify(path.basename(filename))
+      const result=await window.webContents.executeJavaScript(`(async()=>{
+        const {openPictureAsPdf}=await import('/picture-import.mjs')
+        const input=new File([Uint8Array.from(atob(${data}),c=>c.charCodeAt(0))],${name})
+        const file=await openPictureAsPdf(input)
+        return {name:file.name,bytes:await file.arrayBuffer()}
+      })()`)
+      const opened=await host.open(result.name,Buffer.from(result.bytes))
+      return {picture:true,id:opened.id}
+    }
+    const opened = await host.open(path.basename(filename), bytes)
     originalFiles.set(opened.id, { filename, hash: hashBytes(bytes) })
     await rememberOriginalFiles()
   } catch (error) {
@@ -31,7 +53,7 @@ async function openDocument(filename, confirmed = false) {
 if (!app.requestSingleInstanceLock()) app.quit()
 else {
   app.on("second-instance", (_, args) => {
-    const filename = args.find(value => /\.(pdf|docx?)$/i.test(value))
+    const filename = args.find(value => /\.(pdf|docx?|png|jpe?g|webp|gif|bmp)$/i.test(value))
     if (host) void openDocument(filename)
     else if (filename) pending = filename
     if (window?.isMinimized()) window.restore()
@@ -58,14 +80,45 @@ else {
     })
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
     window.webContents.on("will-navigate", event => event.preventDefault())
+    ipcMain.handle('app-version',event=>{if(event.sender===window.webContents)return app.getVersion()})
+    ipcMain.handle('download-update',async(event,url,digest)=>{
+      if(event.sender!==window.webContents)throw Error('Open the updater from Elleson Docs.')
+      const destination=await require('./update-download.cjs').downloadUpdate(url,digest,path.join(app.getPath('downloads'),'Elleson Docs updates'))
+      shell.showItemInFolder(destination);return destination
+    })
     ipcMain.handle("pick-document", async event => {
       if (event.sender !== window.webContents) return
       const selection = await dialog.showOpenDialog(window, {
         properties: ["openFile"],
-        filters: [{ name: "PDF and Word documents", extensions: ["pdf", "doc", "docx"] }]
+        filters: [
+          {name:"Documents and pictures",extensions:["pdf","doc","docx","png","jpg","jpeg","webp","gif","bmp"]},
+          {name:"Pictures",extensions:["png","jpg","jpeg","webp","gif","bmp"]},
+          {name:"PDF and Word documents",extensions:["pdf","doc","docx"]}
+        ]
       })
-      await openDocument(selection.filePaths[0], true)
+      return openDocument(selection.filePaths[0], true)
     })
+    ipcMain.handle('unlock-document',async(event,password)=>{
+      if(event.sender!==window.webContents||!lockedDocument)throw new Error('Select the protected PDF again.')
+      if(password===null){lockedDocument=null;return false}
+      const {filename,bytes}=lockedDocument
+      const unlocked=(await import('./document-extras.mjs')).unlockPdf(bytes,password)
+      await host.open(path.basename(filename).replace(/\.pdf$/i,' - unlocked.pdf'),Buffer.from(unlocked))
+      lockedDocument=null
+      return true
+    })
+    async function wordToPdf(values){
+      if(!Array.isArray(values)||values.length>40*1024*1024||!values.every(value=>Number.isInteger(value)&&value>=0&&value<=255))throw new Error('Choose a Word document below 40 MB.')
+      const printWindow=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}})
+      printWindow.webContents.setWindowOpenHandler(()=>({action:'deny'}))
+      try{
+        await printWindow.loadURL(host.address+'/word-print.html')
+        await printWindow.webContents.executeJavaScript(`(async()=>{const bytes=new Uint8Array(${JSON.stringify(values)});await window.renderWordForPrint(bytes);await document.fonts.ready;await Promise.all([...document.images].map(image=>image.decode().catch(()=>{})));const page=document.querySelector('section.docx');if(page){const style=getComputedStyle(page),rule=document.createElement('style');rule.textContent='@page { size: '+style.width+' '+style.minHeight+'; margin: 0; }';document.head.append(rule)}})()`)
+        return Array.from(await printWindow.webContents.printToPDF({printBackground:true,preferCSSPageSize:true,margins:{top:0,bottom:0,left:0,right:0}}))
+      }finally{printWindow.destroy()}
+    }
+    host.setWordRenderer(wordToPdf)
+    ipcMain.handle('word-to-pdf',(event,values)=>{if(event.sender!==window.webContents)throw Error('Invalid window');return wordToPdf(values)})
     ipcMain.handle("save-document", async (event, id, options) => {
       if (event.sender !== window.webContents) return false
       const exported = await host.exportFile(id, { flatten: options?.flatten === true })
@@ -73,7 +126,7 @@ else {
       const result = await dialog.showSaveDialog(window, { defaultPath: options?.saveAs ? filename.replace(/ - copy(?=\.[^.]+$)/, "") : filename })
       if (result.canceled) return false
       if (path.extname(result.filePath).toLowerCase() !== "." + exported.extension) throw new Error("Keep the ." + exported.extension + " extension. Use Convert files for another format.")
-      await fs.writeFile(result.filePath, bytes)
+      await durableWrite(result.filePath, bytes)
       await host.markSaved(id, changeNumber, exported)
       if (!originalFiles.has(id) || options?.saveAs) originalFiles.set(id, { filename: result.filePath, hash: hashBytes(bytes) })
       if (options?.saveAs && host.getDocument()?.extension === exported.extension) await host.renameDocument(id, path.basename(result.filePath))
@@ -85,7 +138,7 @@ else {
       const result = await dialog.showSaveDialog(window, { defaultPath: path.basename(name), properties: ["showOverwriteConfirmation", "createDirectory"] })
       if (result.canceled) return false
       const temporary = result.filePath + ".elleson-" + require("node:crypto").randomUUID() + ".tmp"
-      try { await fs.writeFile(temporary, Buffer.from(values), { flag: "wx" }); await fs.rename(temporary, result.filePath) }
+      try { await durableWrite(result.filePath, Buffer.from(values)) }
       catch (error) { await fs.unlink(temporary).catch(() => {}); throw error }
       shell.showItemInFolder(result.filePath)
       return true
@@ -119,7 +172,7 @@ else {
         if (result.response === 1) return { chooseCopy: true }
       }
       const temporary = original.filename + ".elleson-" + Date.now() + ".tmp"
-      try { await fs.writeFile(temporary, exported.bytes); await fs.rename(temporary, original.filename) }
+      try { await durableWrite(original.filename, exported.bytes) }
       catch (error) { await fs.unlink(temporary).catch(() => {}); throw error }
       original.hash = hashBytes(exported.bytes)
       await rememberOriginalFiles()
@@ -129,6 +182,7 @@ else {
     await window.loadURL(host.address + "/#owner=" + host.owner)
     await openDocument(pending)
   }).catch(error => {
+    if (quitting || window?.isDestroyed()) return
     dialog.showErrorBox("Elleson Docs", error.message)
     app.quit()
   })

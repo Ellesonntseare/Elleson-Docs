@@ -7,13 +7,20 @@ const save = document => { const buffer = document.saveToBuffer("garbage=1,compr
 export function reviewList(bytes, index) {
   const document = new mupdf.PDFDocument(bytes), page = document.loadPage(index)
   try { return page.getAnnotations().filter(annotation => ["Text", "Underline", "StrikeOut", "Highlight"].includes(annotation.getType())).map(annotation => ({
-    id: annotation.getObject().get("NM").asString() || "ref-" + annotation.getObject().asIndirect(), type: annotation.getType(), text: annotation.getContents(), author: annotation.getAuthor(),
+    id: annotation.getObject().get("NM").asString() || "ref-" + annotation.getObject().asIndirect(), type: annotation.getType(), text: annotation.getContents(), author: annotation.getAuthor(), resolved: annotation.getObject().get("State").asString() === "Accepted",
     replyTo: annotation.getObject().get("IRT").isNull() ? null : annotation.getObject().get("IRT").get("NM").asString() || "ref-" + annotation.getObject().get("IRT").asIndirect()
   })) } finally { page.destroy(); document.destroy() }
 }
 export function review(bytes, edit) {
   const document = new mupdf.PDFDocument(bytes), page = document.loadPage(edit.page - 1)
   try {
+    if (edit.action === 'resolve') {
+      const selected = page.getAnnotations().find(annotation => (annotation.getObject().get('NM').asString() || 'ref-' + annotation.getObject().asIndirect()) === edit.target)
+      if (!selected) throw new Error('This comment is no longer available.')
+      selected.getObject().put('StateModel',document.newString('Review'))
+      selected.getObject().put('State',document.newString(edit.resolved ? 'Accepted' : 'None'))
+      selected.update(); return save(document)
+    }
     if (!["Text", "Underline", "StrikeOut", "Highlight"].includes(edit.type) || typeof edit.text !== "string" || edit.text.length > 4000 || !Array.isArray(edit.rect) || edit.rect.length !== 4 || !edit.rect.every(Number.isFinite)) throw new Error("Choose a valid annotation.")
     const parent = edit.replyTo ? page.getAnnotations().find(annotation => (annotation.getObject().get("NM").asString() || "ref-" + annotation.getObject().asIndirect()) === edit.replyTo) : null
     if (edit.replyTo && !parent) throw new Error("This comment is no longer available.")

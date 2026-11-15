@@ -1,3 +1,5 @@
+import {unzipSync,zipSync,strFromU8,strToU8} from 'fflate'
+import {DOMParser,XMLSerializer} from '@xmldom/xmldom'
 export const wordNamespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
 function child(parent, name) {
@@ -22,6 +24,7 @@ export function applyFormatting(document, formats, listIds = {}) {
     if (!paragraph) throw new Error("The selected paragraph changed.")
     const properties = ensure(paragraph, "pPr", true)
     if (format.align) set(ensure(properties, "jc"), "val", format.align)
+    if (format.spacing) { set(ensure(properties,'spacing'),'line',Math.round(format.spacing*240)); set(ensure(properties,'spacing'),'lineRule','auto') }
     if (format.list) {
       if (format.list === "none") child(properties, "numPr")?.parentNode.removeChild(child(properties, "numPr"))
       else {
@@ -45,6 +48,8 @@ export function applyFormatting(document, formats, listIds = {}) {
       }
       if (typeof format.bold === "boolean") set(ensure(runProperties, "b"), "val", format.bold ? 1 : 0)
       if (typeof format.italic === "boolean") set(ensure(runProperties, "i"), "val", format.italic ? 1 : 0)
+      if (typeof format.underline === 'boolean') set(ensure(runProperties,'u'),'val',format.underline?'single':'none')
+      if (format.color) set(ensure(runProperties,'color'),'val',format.color.replace('#',''))
     }
   }
 }
@@ -54,7 +59,9 @@ export function validFormat(format) {
   return Object.entries(format).every(([key, value]) =>
     key === "font" ? typeof value === "string" && value.length > 0 && value.length <= 80 :
     key === "size" ? Number.isFinite(value) && value >= 6 && value <= 96 && Number.isInteger(value * 2) :
-    key === "bold" || key === "italic" ? typeof value === "boolean" :
+    key === "bold" || key === "italic" || key === 'underline' ? typeof value === "boolean" :
+    key === 'color' ? /^#[0-9a-f]{6}$/i.test(value) :
+    key === 'spacing' ? Number.isFinite(value) && value >= 1 && value <= 3 :
     key === "align" ? ["left", "center", "right", "both"].includes(value) :
     key === "list" ? ["none", "bullet", "decimal"].includes(value) : false)
 }
@@ -150,6 +157,7 @@ export function ensureListParts(archive, Parser, Serializer, fromBytes, toBytes,
 }
 
 export function insertImage(document, archive, image, Parser, Serializer, fromBytes, toBytes) {
+  if (image.position && !validInkPosition(image.position)) throw new Error('The drawing position is invalid. Reopen the Word page and try again.')
   const namespace = document.documentElement.namespaceURI
   const paragraph = document.getElementsByTagNameNS(namespace, "p")[image.index]
   if (!paragraph) throw new Error("Choose a paragraph for the image.")
@@ -178,8 +186,8 @@ export function insertImage(document, archive, image, Parser, Serializer, fromBy
     types.documentElement.appendChild(type)
   }
   archive["[Content_Types].xml"] = serialize(types)
-  const width = Math.round(Math.min(480, image.width) * 9525)
-  const height = Math.round(width * image.height / image.width)
+  const width = Math.round((image.position?.width ?? Math.min(480, image.width)) * 9525)
+  const height = Math.round(image.position ? image.position.height * 9525 : width * image.height / image.width)
   const strict = namespace.includes("purl.oclc.org")
   const drawingBase = strict ? "http://purl.oclc.org/ooxml/drawingml/" : "http://schemas.openxmlformats.org/drawingml/2006/"
   const officeRelationships = strict ? "http://purl.oclc.org/ooxml/officeDocument/relationships" : "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -194,5 +202,66 @@ export function insertImage(document, archive, image, Parser, Serializer, fromBy
     '<pic:blipFill><a:blip r:embed="' + id + '"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>' +
     '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + width + '" cy="' + height + '"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>' +
     '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>').documentElement
-  paragraph.parentNode.insertBefore(document.importNode(imageParagraph, true), paragraph.nextSibling)
+  if (image.position) {
+    const inline = imageParagraph.getElementsByTagNameNS(drawingNamespace, 'inline')[0]
+    const anchor = document.createElementNS(drawingNamespace, 'wp:anchor')
+    for (const [key,value] of Object.entries({distT:0,distB:0,distL:0,distR:0,simplePos:0,relativeHeight:251658240+drawingId,behindDoc:0,locked:0,layoutInCell:1,allowOverlap:1})) anchor.setAttribute(key,String(value))
+    const add = (name,attrs,text) => {const node=document.createElementNS(drawingNamespace,'wp:'+name);for(const [key,value]of Object.entries(attrs||{}))node.setAttribute(key,String(value));if(text!==undefined)node.textContent=String(text);return node}
+    anchor.appendChild(add('simplePos',{x:0,y:0}))
+    for (const [axis,value] of [['H',image.position.x],['V',image.position.paragraphY??image.position.y]]) {const node=add('position'+axis,{relativeFrom:axis==='V'&&Number.isFinite(image.position.paragraphY)?'paragraph':'page'});node.appendChild(add('posOffset',{},Math.round(value*9525)));anchor.appendChild(node)}
+    anchor.appendChild(document.importNode(inline.firstChild,true))
+    anchor.appendChild(add('wrapNone'))
+    for (const node of Array.from(inline.childNodes).slice(1)) anchor.appendChild(document.importNode(node,true))
+    const property=anchor.getElementsByTagNameNS(drawingNamespace,'docPr')[0];property.setAttribute('name','Elleson ink');property.setAttribute('descr',JSON.stringify(image.position))
+    const drawing=document.createElementNS(namespace,'w:drawing');drawing.appendChild(anchor)
+    const run=document.createElementNS(namespace,'w:r');run.appendChild(drawing);paragraph.appendChild(run)
+  } else paragraph.parentNode.insertBefore(document.importNode(imageParagraph, true), paragraph.nextSibling)
+}
+
+export function validInkPosition(position) {
+  return position && ['x','y','width','height'].every(key=>typeof position[key]==='number'&&Number.isFinite(position[key])) && (position.paragraphY===undefined||Number.isFinite(position.paragraphY)&&Math.abs(position.paragraphY)<=5000) && position.x>=0 && position.y>=0 && position.width>0 && position.height>0 && position.x+position.width<=5000 && position.y+position.height<=5000
+}
+
+export function eraseWordInk(bytes,target){return changeWordInk(bytes,target)}
+
+export function changeWordInk(bytes,target,position){
+  if(position!==undefined&&!validInkPosition(position))throw new Error("The drawing must fit on the page.")
+  const archive=unzipSync(bytes)
+  const part='word/document.xml',relations='word/_rels/document.xml.rels'
+  if(!archive[part]||!archive[relations])return null
+  const parser=new DOMParser()
+  const xml=parser.parseFromString(strFromU8(archive[part]),'text/xml')
+  const relationships=parser.parseFromString(strFromU8(archive[relations]),'text/xml')
+  const relation=Array.from(relationships.getElementsByTagNameNS('*','Relationship')).find(node=>node.getAttribute('Target')===target)
+  if(!relation)return null
+  let changed=false
+  for(const drawing of Array.from(xml.getElementsByTagNameNS('*','drawing'))){
+    const children=Array.from(drawing.getElementsByTagName('*'))
+    const isInk=children.some(node=>node.localName==='docPr'&&node.getAttribute('name')==='Elleson ink')
+    const matches=children.some(node=>node.localName==='blip'&&node.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships','embed')===relation.getAttribute('Id'))
+    if(!isInk||!matches)continue
+    if(position===undefined)drawing.parentNode.removeChild(drawing)
+    else {
+      const anchor=children.find(node=>node.localName==='anchor')
+      const property=children.find(node=>node.localName==='docPr')
+      if(!anchor||!property)continue
+      property.setAttribute('descr',JSON.stringify(position))
+      for(const [axis,value] of [['H',position.x],['V',position.paragraphY??position.y]]){
+        const placement=Array.from(anchor.childNodes).find(node=>node.localName==='position'+axis)
+        if(placement){
+          placement.setAttribute('relativeFrom',axis==='V'&&position.paragraphY!==undefined?'paragraph':'page')
+          const offset=Array.from(placement.childNodes).find(node=>node.localName==='posOffset')
+          if(offset)offset.textContent=String(Math.round(value*9525))
+        }
+      }
+      for(const extent of children.filter(node=>node.localName==='extent'||node.localName==='ext'&&node.parentNode.localName==='xfrm')){
+        extent.setAttribute('cx',String(Math.round(position.width*9525)))
+        extent.setAttribute('cy',String(Math.round(position.height*9525)))
+      }
+    }
+    changed=true
+  }
+  if(!changed)return null
+  archive[part]=strToU8(new XMLSerializer().serializeToString(xml))
+  return zipSync(archive)
 }

@@ -52,17 +52,47 @@ export function editWord(document, archive, edit, Parser, Serializer, fromBytes,
     else {
       const nodes = directText(p), text = nodes.map(node => node.textContent).join("")
       if (!Number.isInteger(edit.offset) || edit.offset < 0 || edit.offset > text.length) throw new Error("Choose a valid insertion point.")
-      const after = p.cloneNode(true)
-      let position = 0
-      const afterNodes = directText(after)
-      nodes.forEach((node, index) => {
-        const original = node.textContent
-        node.textContent = original.slice(0, Math.max(0, edit.offset - position))
-        afterNodes[index].textContent = original.slice(Math.max(0, edit.offset - position))
-        position += original.length
-      })
-      if (!directText(p).some(node => node.textContent)) directText(p)[0].textContent = " "
-      if (!directText(after).some(node => node.textContent)) directText(after)[0].textContent = " "
+      // Revision/field boundaries require a dedicated structural editor. Refuse
+      // before changing anything rather than cloning identifiers or field state.
+      if (['ins', 'del', 'moveFrom', 'moveTo', 'fldChar', 'fldSimple', 'sdt'].some(name => p.getElementsByTagNameNS(namespace, name).length)) throw new Error('This paragraph contains tracked changes or a Word field. Insert a paragraph after it using More Word tools instead.')
+      const after = make(document, 'p')
+      const properties = Array.from(p.childNodes).find(node => node.localName === 'pPr')
+      if (properties) {
+        after.appendChild(properties.cloneNode(true))
+        // The section ends after the newly split paragraph, exactly once.
+        for (const section of Array.from(properties.getElementsByTagNameNS(namespace, 'sectPr'))) section.parentNode.removeChild(section)
+      }
+      const textNodes = new Set(nodes)
+      let remaining = edit.offset
+      const divide = node => {
+        if (textNodes.has(node)) {
+          const value = node.textContent, cut = Math.min(remaining, value.length)
+          remaining -= cut
+          if (cut === value.length) return null
+          if (cut === 0) return node
+          const tail = node.cloneNode(false)
+          node.textContent = value.slice(0, cut); tail.textContent = value.slice(cut)
+          for (const part of [node, tail]) part.setAttributeNS('http://www.w3.org/XML/1998/namespace', 'xml:space', 'preserve')
+          return tail
+        }
+        // Drawings (including nested text boxes), bookmarks, tabs and breaks
+        // are atomic: move them to one side, never copy them.
+        const containsText = nodes.some(text => { let owner = text.parentNode; while (owner && owner !== node) owner = owner.parentNode; return owner === node })
+        if (!containsText) return remaining === 0 ? node : null
+        const tail = node.cloneNode(false)
+        for (const item of Array.from(node.childNodes)) {
+          if (item.localName === 'rPr') { tail.appendChild(item.cloneNode(true)); continue }
+          const moved = divide(item)
+          if (moved) tail.appendChild(moved)
+        }
+        return tail.childNodes.length ? tail : null
+      }
+      for (const node of Array.from(p.childNodes)) {
+        if (node === properties) continue
+        const moved = divide(node)
+        if (moved) after.appendChild(moved)
+      }
+      for (const paragraph of [p, after]) if (!directText(paragraph).length) paragraph.appendChild(blank(document, '').firstChild)
       p.parentNode.insertBefore(after, p.nextSibling)
     }
   } else if (edit.action === "page-break") {

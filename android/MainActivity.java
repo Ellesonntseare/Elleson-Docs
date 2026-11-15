@@ -49,6 +49,7 @@ public final class MainActivity extends Activity {
     private String localExportReceipt = "";
     private Uri incomingDocument;
     private boolean viewerReady;
+    private volatile boolean updateDownloading;
     private Uri pendingSource;
     private static final String LOCAL_ORIGIN = "https://appassets.androidplatform.net";
 
@@ -105,7 +106,16 @@ public final class MainActivity extends Activity {
                 try (android.database.Cursor cursor = getContentResolver().query(uri, new String[] { android.provider.OpenableColumns.DISPLAY_NAME }, null, null, null)) {
                     if (cursor != null && cursor.moveToFirst()) name = cursor.getString(0);
                 }
-                if (name == null) name = "application/pdf".equals(getContentResolver().getType(uri)) ? "document.pdf" : "document.docx";
+                String type = getContentResolver().getType(uri);
+                if (name == null) {
+                    String extension = "application/pdf".equals(type) ? "pdf" : "docx";
+                    if ("image/jpeg".equals(type)) extension = "jpg";
+                    else if ("image/png".equals(type)) extension = "png";
+                    else if ("image/webp".equals(type)) extension = "webp";
+                    else if ("image/gif".equals(type)) extension = "gif";
+                    else if ("image/bmp".equals(type)) extension = "bmp";
+                    name = "document." + extension;
+                }
                 java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
                 try (InputStream input = getContentResolver().openInputStream(uri)) {
                     if (input == null) throw new IllegalStateException("File unavailable");
@@ -116,7 +126,7 @@ public final class MainActivity extends Activity {
                     }
                 }
                 final String script = "window.dispatchEvent(new CustomEvent('elleson-open-file',{detail:{name:"
-                    + org.json.JSONObject.quote(name) + ",data:" + org.json.JSONObject.quote(Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP)) + "}}))";
+                    + org.json.JSONObject.quote(name) + ",type:" + org.json.JSONObject.quote(type == null ? "" : type) + ",data:" + org.json.JSONObject.quote(Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP)) + "}}))";
                 runOnUiThread(() -> { if (viewer == target) target.evaluateJavascript(script, null); });
             } catch (Exception error) {
                 runOnUiThread(() -> Toast.makeText(this, "Could not open this document. Check its type and size.", Toast.LENGTH_LONG).show());
@@ -148,7 +158,7 @@ public final class MainActivity extends Activity {
         local.setOnClickListener(view -> loadViewer(LOCAL_ORIGIN));
         content.addView(local);
         TextView help = new TextView(this);
-        help.setText("PCs on your Wi-Fi appear below. Connect once using the code on your PC; this phone remembers the connection next time. You can also enter an address manually.");
+        help.setText("The app connects to a PC on your Wi-Fi automatically. No codes or approval prompts are needed. You can also enter an address manually.");
         help.setTextSize(16);
         help.setPadding(0, dp(12), 0, dp(16));
         content.addView(help);
@@ -206,11 +216,13 @@ public final class MainActivity extends Activity {
                             String address = "http://" + ip + ":" + port;
                             if (!found.add(address)) continue;
                             String name = data.optString("name", "PC");
+                            final boolean firstPC = found.size() == 1;
                             runOnUiThread(() -> {
                                 if (!list.isAttachedToWindow()) return;
                                 Button pc = new Button(this); pc.setText("Connect to " + name);
                                 pc.setOnClickListener(view -> { getPreferences(MODE_PRIVATE).edit().putString("address", address).apply(); loadViewer(address); });
                                 list.addView(pc);
+                                if (firstPC) { getPreferences(MODE_PRIVATE).edit().putString("address", address).apply(); loadViewer(address); }
                             });
                         } catch (java.net.SocketTimeoutException ignored) { }
                     }
@@ -238,6 +250,7 @@ public final class MainActivity extends Activity {
         viewer = new WebView(this);
         viewer.getSettings().setJavaScriptEnabled(true);
         viewer.getSettings().setDomStorageEnabled(true);
+        viewer.getSettings().setTextZoom(100);
         viewer.getSettings().setAllowFileAccess(false);
         viewer.getSettings().setAllowContentAccess(true);
         viewer.addJavascriptInterface(new ExportBridge(), "EllesonAndroid");
@@ -247,6 +260,7 @@ public final class MainActivity extends Activity {
             }
             @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
+                if ("https".equals(uri.getScheme()) && "api.github.com".equals(uri.getHost()) && "/repos/Ellesonntseare/Elleson-Docs/releases".equals(uri.getPath()) && "GET".equals(request.getMethod())) return null;
                 if (LOCAL_ORIGIN.equals(origin) && matchesOrigin(uri)) {
                     String resource = uri.getPath();
                     if (resource == null || "/".equals(resource)) resource = "/index.html";
@@ -277,8 +291,15 @@ public final class MainActivity extends Activity {
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (fileCallback != null) fileCallback.onReceiveValue(null);
                 fileCallback = callback;
-                boolean image = false;
-                for (String accepted : params.getAcceptTypes()) if (accepted.startsWith("image/")) image = true;
+                boolean acceptsImage = false, acceptsOther = false;
+                for (String value : params.getAcceptTypes()) {
+                    for (String type : value.split(",")) {
+                        String accepted = type.trim().toLowerCase(java.util.Locale.ROOT);
+                        if (accepted.startsWith("image/") || accepted.matches("\\.(png|jpe?g|webp|gif|bmp)")) acceptsImage = true;
+                        else if (!accepted.isEmpty()) acceptsOther = true;
+                    }
+                }
+                boolean image = acceptsImage && !acceptsOther;
                 cameraUri = null;
                 if (image && params.isCaptureEnabled()) {
                     Intent camera = new Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE);
@@ -299,7 +320,8 @@ public final class MainActivity extends Activity {
                 intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, multiple);
                 if (!image && !multiple) intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {
                     "application/pdf", "application/msword",
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp"
                 });
                 try {
                     startActivityForResult(intent, PICK_FILE);
@@ -320,7 +342,61 @@ public final class MainActivity extends Activity {
         return expected.getScheme().equals(uri.getScheme()) && expected.getHost().equals(uri.getHost()) && expected.getPort() == uri.getPort();
     }
 
+    private void updateStatus(String message) {
+        runOnUiThread(() -> { if (viewer != null) viewer.evaluateJavascript("window.dispatchEvent(new CustomEvent('elleson-update-status',{detail:" + org.json.JSONObject.quote(message) + "}))", null); });
+    }
     public final class ExportBridge {
+        @JavascriptInterface public String appVersion() {
+            try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
+            catch (Exception error) { return "0.4.10"; }
+        }
+        private boolean localUpdate(String address) {
+            if(address==null||LOCAL_ORIGIN.equals(origin))return false;
+            Uri uri=Uri.parse(address);
+            return matchesOrigin(uri)&&"http".equals(uri.getScheme())&&"/api/local-update/android.apk".equals(uri.getPath())&&uri.getQuery()==null&&uri.getFragment()==null;
+        }
+        @JavascriptInterface public void installUpdate(String address, String digest) {
+            if (updateDownloading) return;
+            if ((address == null || (!localUpdate(address) && !address.startsWith("https://github.com/Ellesonntseare/Elleson-Docs/releases/download/")) || !address.endsWith(".apk")) || digest == null || !digest.matches("sha256:[a-f0-9]{64}")) { updateStatus("The update download is invalid."); return; }
+            if (!getPackageManager().canRequestPackageInstalls()) {
+                runOnUiThread(() -> { updateStatus("Allow updates from Elleson Docs, then tap Download update again."); startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()))); });
+                return;
+            }
+            updateDownloading = true;
+            new Thread(() -> {
+                java.io.File output = null;
+                try {
+                    String relative = "shared/" + java.util.UUID.randomUUID() + "/Elleson-Docs-update.apk";
+                    output = new java.io.File(getCacheDir(), relative); output.getParentFile().mkdirs();
+                    URL location = new URL(address); HttpURLConnection connection = null;
+                    for (int redirects = 0; redirects < 6; redirects++) {
+                        String hostname = location.getHost();
+                        if (!localUpdate(location.toString()) && (!"https".equals(location.getProtocol()) || !("github.com".equals(hostname) || "release-assets.githubusercontent.com".equals(hostname) || "objects.githubusercontent.com".equals(hostname)))) throw new java.io.IOException("Unexpected download address.");
+                        connection = (HttpURLConnection) location.openConnection(); connection.setConnectTimeout(15000); connection.setReadTimeout(30000); connection.setInstanceFollowRedirects(false);
+                        int code = connection.getResponseCode();
+                        if (code >= 300 && code < 400) { URL next = new URL(location, connection.getHeaderField("Location")); connection.disconnect(); location = next; continue; }
+                        if (code != 200) throw new java.io.IOException("The update could not be downloaded.");
+                        break;
+                    }
+                    if (connection == null || connection.getResponseCode() != 200) throw new java.io.IOException("Too many download redirects.");
+                    java.security.MessageDigest checksum = java.security.MessageDigest.getInstance("SHA-256");
+                    try (InputStream input = connection.getInputStream(); java.io.FileOutputStream stream = new java.io.FileOutputStream(output)) {
+                        byte[] buffer = new byte[65536]; int count; long total = 0, previousProgress = 0;
+                        long expected = connection.getContentLengthLong();
+                        while ((count = input.read(buffer)) != -1) { total += count; if (total > 160 * 1024 * 1024) throw new java.io.IOException("Update is too large."); checksum.update(buffer, 0, count); stream.write(buffer, 0, count); if(total-previousProgress>=1024*1024){previousProgress=total;updateStatus(expected>0?"Downloading update: "+Math.min(100,total*100/expected)+"%":"Downloading update: "+total/(1024*1024)+" MB");} }
+                        stream.getFD().sync();
+                    } finally { connection.disconnect(); }
+                    StringBuilder actual = new StringBuilder(); for (byte value : checksum.digest()) actual.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
+                    if (!digest.substring(7).equals(actual.toString())) throw new java.io.IOException("Update checksum failed. Try downloading again.");
+                    android.content.pm.PackageInfo installed = getPackageManager().getPackageInfo(getPackageName(), android.content.pm.PackageManager.GET_SIGNATURES);
+                    android.content.pm.PackageInfo candidate = getPackageManager().getPackageArchiveInfo(output.getAbsolutePath(), android.content.pm.PackageManager.GET_SIGNATURES);
+                    if (candidate == null || !getPackageName().equals(candidate.packageName) || candidate.versionCode <= installed.versionCode || !java.util.Arrays.equals(installed.signatures, candidate.signatures)) throw new java.io.IOException("This update does not match the installed app or is not newer.");
+                    Uri uri = Uri.parse("content://za.co.elleson.docs.camera/" + relative);
+                    runOnUiThread(() -> { Intent install = new Intent(Intent.ACTION_VIEW); install.setDataAndType(uri, "application/vnd.android.package-archive"); install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); install.setClipData(android.content.ClipData.newRawUri("App update", uri)); startActivity(install); updateStatus("Update verified. Confirm installation in Android."); });
+                } catch (Exception error) { if (output != null) output.delete(); updateStatus("Update failed: " + error.getMessage()); }
+                finally { updateDownloading = false; }
+            }, "elleson-update").start();
+        }
         @JavascriptInterface public void handoff(String data, String name, int page, double zoom, boolean toPC) {
             if (data == null || data.length() > 57000000) return;
             try {
@@ -357,6 +433,9 @@ public final class MainActivity extends Activity {
                     byte[] bytes = Base64.decode(data, Base64.DEFAULT);
                     Runnable write = () -> new Thread(() -> {
                         try {
+                            // Some document providers cannot replace atomically. Retain
+                            // both the original and pending content before truncating.
+                            retainSaveBackup(uri, id, bytes);
                             try (OutputStream output = getContentResolver().openOutputStream(uri, "wt")) {
                                 if (output == null) throw new IllegalStateException();
                                 output.write(bytes);
@@ -492,6 +571,24 @@ public final class MainActivity extends Activity {
                     else writeExport(url, token, data.getData());
                 }, "elleson-docs-export").start();
             }
+        }
+    }
+
+    private void retainSaveBackup(Uri uri, String id, byte[] pending) throws Exception {
+        if (id == null || !id.matches("[a-f0-9-]{36}")) throw new IllegalArgumentException("Invalid document");
+        java.io.File directory = new java.io.File(getFilesDir(), "save-recovery");
+        if (!directory.isDirectory() && !directory.mkdirs()) throw new java.io.IOException("Recovery storage unavailable");
+        java.io.File original = new java.io.File(directory, id + "-original.bin");
+        java.io.File temporary = new java.io.File(directory, id + "-original.tmp");
+        try (InputStream input = getContentResolver().openInputStream(uri); java.io.FileOutputStream output = new java.io.FileOutputStream(temporary)) {
+            if (input == null) throw new java.io.IOException("Original unavailable");
+            byte[] buffer = new byte[32768];
+            for (int count; (count = input.read(buffer)) != -1;) output.write(buffer, 0, count);
+            output.getFD().sync();
+        }
+        java.nio.file.Files.move(temporary.toPath(), original.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        try (java.io.FileOutputStream output = new java.io.FileOutputStream(new java.io.File(directory, id + "-pending.bin"))) {
+            output.write(pending); output.getFD().sync();
         }
     }
 

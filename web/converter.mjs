@@ -28,6 +28,7 @@ export function installConverter(pdfjs) {
   document.body.append(dialog)
   const $ = id => document.getElementById('convert-' + id)
   let files = [], results = [], cancelled = false, busy = false, worker, previewUrl, reviewed = [], reviewOptions
+  $('target').add(new Option('Searchable scanned PDF','searchable'))
   const status = text => $('progress').textContent = text
   const check = () => { if (cancelled) throw new Error('Conversion cancelled. Originals are unchanged.') }
   const engine = () => import('./conversion-runtime.mjs')
@@ -71,12 +72,12 @@ export function installConverter(pdfjs) {
     }))
     if (results.length > 1) { const b = document.createElement('button'); b.textContent = 'Save all as ZIP'; b.onclick = async () => { try { await save({ name: 'Converted documents.zip', bytes: (await engine()).archive(results) }) } catch (error) { status(error.message) } }; $('results').append(b) }
   }
-  async function recognize(blob, opts) {
+  async function recognize(blob, opts, blocks = false) {
     if (!worker) {
       if (!window.Tesseract) await new Promise((resolve, reject) => { const script = document.createElement('script'); script.src = '/vendor/tesseract/tesseract.min.js'; script.onload = resolve; script.onerror = () => reject(new Error('Could not load OCR.')); document.head.append(script) })
       worker = await window.Tesseract.createWorker(opts.language, 1, { workerPath: location.origin + '/vendor/tesseract/worker.min.js', workerBlobURL: false, corePath: location.origin + '/vendor/tesseract-core/', langPath: location.origin + '/vendor/ocr-data/', gzip: true, cacheMethod: 'none' })
     }
-    check(); return (await worker.recognize(blob)).data.text
+    check(); const data=(await worker.recognize(blob,{},blocks?{blocks:true}:{})).data; return blocks?data:data.text
   }
   async function textOf(file, opts, ocr) {
     const e = await engine(), ext = file.name.split('.').pop().toLowerCase(), bytes = new Uint8Array(await file.arrayBuffer())
@@ -96,12 +97,17 @@ export function installConverter(pdfjs) {
   async function run() {
     if (!files.length) { status('Choose files first.'); return }
     setBusy(true); cancelled = false; results = []; reviewed = []; $('review').hidden = true; $('preview').hidden = true; showResults()
-    const opts = options(), e = await engine(), combined = [], ocr = $('ocr').checked
+    const opts = options(), e = await engine(), combined = [], ocr = $('ocr').checked && $('target').value !== 'searchable'
     try {
       if (ocr && !['docx', 'txt', 'pdf', 'combine'].includes(opts.target)) throw new Error('Choose Word, text, or PDF for OCR review.')
       for (let index = 0; index < files.length; index++) {
         check(); const file = files[index], ext = file.name.split('.').pop().toLowerCase(), bytes = new Uint8Array(await file.arrayBuffer())
         status(`File ${index + 1} of ${files.length}: ${file.name}`); $('meter').value = index / files.length
+        if(opts.target==='searchable') {
+          const images=ext==='pdf'?await e.rasterPdf(pdfjs,bytes,{...opts,target:'png'},status,check):[{bytes:(await e.imageData(file)).bytes}]
+          const converted=await e.searchablePdf(images,blob=>recognize(blob,opts,true),check)
+          results.push({name:base(file.name)+' - searchable.pdf',bytes:converted});continue
+        }
         if (ocr) { reviewed.push({ name: file.name, text: await textOf(file, opts, true) }); continue }
         let converted
         if (['jpg', 'png', 'compress', 'extract'].includes(opts.target)) {
@@ -113,6 +119,7 @@ export function installConverter(pdfjs) {
           if (['pdf', 'docx', 'txt', 'md'].includes(ext)) converted = await e.wordBytes(await textOf(file, opts, false))
           else { const image = await e.imageData(file), scale = Math.min(1, 600 / image.width); converted = await e.wordBytes('', [{ ...image, width: image.width * scale, height: image.height * scale }]) }
         } else if (ext === 'pdf') converted = opts.pages ? await e.extractPages(bytes, opts.pages) : bytes
+        else if (ext==='docx' && window.desktopDocs?.wordToPdf) { status('Rendering Word layout…');converted=new Uint8Array(await window.desktopDocs.wordToPdf(Array.from(bytes)));check() }
         else if (['docx', 'txt', 'md'].includes(ext)) converted = await e.textPdf(await textOf(file, opts, false), opts)
         else converted = await e.imagePdf(file, opts)
         check()

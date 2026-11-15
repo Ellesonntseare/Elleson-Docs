@@ -1,6 +1,6 @@
-ELLESON DOCS 0.4.0 PREVIEW 1
+ELLESON DOCS 0.4.10
 
-This is a preview update. See resources/app/UPDATE-STATUS.md for limitations.
+Elleson Docs 0.4.10. See resources/app/UPDATE-STATUS.md for features and verification.
 New: Convert files, New documents, scanner filters, drawing Done, continuous
 reading, password-protected PDF copies, Save As, Rename, and easier pairing.
 More contains additional saving, scanning, printing and document actions.
@@ -8,15 +8,17 @@ More contains additional saving, scanning, printing and document actions.
 WINDOWS
 Extract the complete Windows ZIP and run Elleson Docs.exe.
 Install.cmd adds shortcuts and Windows Open with registration.
-Open file accepts PDF, DOC and DOCX. Save writes back to an opened file;
+Open file accepts PDF, DOC, DOCX and PNG, JPEG, WebP, GIF and BMP pictures.
+Open a picture and choose File > Save as PDF to export a one-page PDF. Save writes back to an opened file;
 Save a copy exports separately. External file changes require a choice.
 Ctrl+S saves; Ctrl+Shift+S saves a copy.
 
 ANDROID AND LIVE EDITING
-Install Elleson-Docs-0.3.0.apk on Android 8 or newer.
+Install Elleson-Docs-Android-0.4.10.apk on Android 8 or newer.
 Open documents on phone works independently for PDF and DOCX.
 For live editing, keep Windows open and use the same trusted Wi-Fi.
-Choose Connect phone on Windows, enter its address and pairing code in Android.
+Open the phone app: it finds the PC and connects without codes or approval.
+If discovery is unavailable, enter the PC address shown under Connect phone.
 Continue on PC transfers the current edited phone document after connection.
 Continue on phone transfers the PC's current document to standalone Android.
 The requested page and zoom travel with the handoff. Independent copies do not
@@ -24,7 +26,15 @@ keep syncing automatically. Return to a paired session for live edits.
 Completed edits are queued during connection loss and conflicts require a choice.
 
 EDITING
-Choose tool groups to show View, Edit, Fill & Sign, Pages or Scan controls.
+Tap Word text or selectable PDF text to edit without choosing Edit text first.
+Word pages retain their dimensions and fit the screen. Edit includes Fit width
+and zoom buttons. Tables and pictures are scaled with the complete page.
+For Word drawing or signing, open Edit > Draw / sign and write on the page.
+Completed strokes automatically join the same live document on phone and PC.
+Ink is embedded in the DOCX. Save writes the updated external document file.
+Use two fingers to zoom while signing. Undo stroke removes a mistake.
+Draw / sign also pauses drawing so you can scroll.
+New incoming writing briefly fades in; existing writing stays visible.
 Select added content to move, resize, rotate, duplicate, edit or delete it.
 Draw, highlight, fill forms and use the larger reusable signature pad.
 Edit PDF previews original-font text changes and supports paragraph reflow
@@ -36,12 +46,23 @@ Word formatting can apply to selected words or a whole paragraph. Enter splits
 a paragraph. More Word tools adds paragraphs, page breaks, table rows/columns,
 image resizing, default headers/footers and page-number fields.
 
+UPDATES
+More > Check for updates shows published releases and downloads verified files.
+Android checks the checksum and installed app signature, then opens Android's
+installation confirmation. Windows downloads a verified ZIP for extraction.
+The updater requires a newer release with matching download assets on GitHub.
+
 SCANS, FILES AND BACKUP
 Scan document captures multiple pages into one PDF with crop corners,
 perspective correction, straightening and document/receipt/photo modes.
 Page-edge detection is an estimate; review the corners before exporting.
 OCR runs locally in English, French and Spanish.
 Tabs retain unsaved work while switching and the workspace recovers on restart.
+Typed Word text and PDF answers are stored on this device before syncing.
+After an interruption, reopen the app and review any pending edits. Use Resume
+captured scan to recover scan pages. Save writes the external document file;
+recovery copies protect work between saves. No software can guarantee the last
+keystroke survives loss of power or damaged storage. Keep regular backups.
 Files includes saved versions, comparison, deletion and pinning.
 Storage & backup shows library usage, controls saved-version retention and
 exports a ZIP. Export a backup before reducing retention or deleting documents.

@@ -1,3 +1,6 @@
+import { readScanDraft, storeScanDraft } from './scan-drafts.mjs'
+import { installProductivity } from './productivity-tools.mjs'
+import { installWordRibbon } from './word-ribbon.mjs'
 export function installTools(app) {
   const $ = id => document.getElementById(id)
   const on = (id, event, handler) => $(id).addEventListener(event, (...args) => Promise.resolve(handler(...args)).catch(app.fail))
@@ -17,8 +20,8 @@ export function installTools(app) {
   for (const id of ["save-original", "save-as", "share-as", "rename-document", "handoff", "print"]) $("history-actions").append($(id))
   on("save-as", "click", async () => {
     const state = app.get(); if (!state.current) { app.status("Open or create a document first."); return }
-    await app.pending()
-    if (window.desktopDocs) { await window.desktopDocs.save(state.current.id, { saveAs: true }); app.invalidate(); await app.refresh() }
+    await app.ensureSynced()
+    if (window.desktopDocs) { const saved = await window.desktopDocs.save(state.current.id, { saveAs: true }); if (saved) { app.invalidate(); await app.refresh(); app.status("Copy saved") } else app.status("Save cancelled") }
     else $("save").click()
   })
   on("rename-document", "click", async () => {
@@ -42,7 +45,7 @@ export function installTools(app) {
   const compact = matchMedia("(max-width: 600px)")
   const extraActions = ["new-document", "convert-files", "open", "library", "connect", "find"].map(id => ({ element: $(id), marker: document.createComment(id) }))
   for (const item of extraActions) item.element.before(item.marker)
-  const arrangeActions = () => { for (const item of extraActions) { if (compact.matches) $("history-actions").append(item.element); else item.marker.after(item.element) } }
+  const arrangeActions = () => { if (document.body.classList.contains("compact-menus")) return; for (const item of extraActions) { if (compact.matches) $("history-actions").append(item.element); else item.marker.after(item.element) } }
   compact.addEventListener("change", arrangeActions); arrangeActions()
   const welcomeActions = document.createElement("div"); welcomeActions.className = "welcome-actions"
   for (const [label, id] of [["New document", "new-document"], ["Scan document", "scan"], ["Convert files", "convert-files"], ["Recent documents", "library"]]) {
@@ -70,12 +73,43 @@ export function installTools(app) {
   })
   const download = async (response, name) => {
     const blob = await response.blob()
+    if (window.desktopDocs?.saveConverted) { await window.desktopDocs.saveConverted(name, Array.from(new Uint8Array(await blob.arrayBuffer()))); return }
     if (window.EllesonAndroid) { window.EllesonAndroid.saveData(await readBase64(blob), name, "", ""); return }
     const link = document.createElement("a"), url = URL.createObjectURL(blob)
     link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 3000)
   }
+  installProductivity({ ...app, download })
   let selectedMark, pdfImages = [], reviewPlacement, reviewStart, comparisonId, wordSelection, accepting = false
   let scans = [], scanIndex = 0
+  const resumeScan = document.createElement('button'); resumeScan.id = 'resume-scan'; resumeScan.textContent = 'Resume captured scan'; resumeScan.hidden = true; $('history-actions').append(resumeScan)
+  let recoveredScan
+  const scanReady = readScanDraft().then(saved => { recoveredScan = saved; resumeScan.hidden = !saved?.scans?.length }).catch(app.fail)
+  const retainScan = () => { resumeScan.hidden = !scans.length; return storeScanDraft({scans,scanIndex}).catch(error => { app.status('Scan recovery storage is unavailable. Keep this window open.'); throw error }) }
+  resumeScan.onclick = async () => { await scanReady; if (!scans.length && recoveredScan?.scans?.length) { scans = recoveredScan.scans; scanIndex = Math.min(recoveredScan.scanIndex || 0, scans.length - 1) }; await showScan() }
+
+  const crop=document.createElement('div');crop.id='scan-crop';crop.innerHTML='<img alt="Original photo — drag corners to crop"><div class="crop-handles"></div>'
+  $('scan-preview').before(crop)
+  let cropUrl
+  let replacingScan=false
+  const retake=document.createElement('button');retake.textContent='Retake or replace this page';retake.onclick=()=>{replacingScan=true;$('scan-file').value='';$('scan-file').click()};$('scan-add').after(retake)
+  const scanQuality=document.createElement('p');scanQuality.setAttribute('role','status');$('scan-preview').after(scanQuality)
+  async function checkPhoto(file){
+    const bitmap=await createImageBitmap(file),canvas=document.createElement('canvas');canvas.width=200;canvas.height=Math.max(20,Math.round(200*bitmap.height/bitmap.width));const ctx=canvas.getContext('2d');ctx.drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close()
+    const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;let light=0,edges=0
+    for(let i=0;i<pixels.length;i+=4){light+=(pixels[i]+pixels[i+1]+pixels[i+2])/3;if(i>=4)edges+=Math.abs(pixels[i]-pixels[i-4])}
+    light/=pixels.length/4;edges/=pixels.length/4
+    scanQuality.textContent=light<65?'This photo looks dark. Review the text or retake with more light.':edges<2?'This photo has little detail. Check focus and text clarity before saving.':'Review the crop and text clarity before creating the PDF.'
+  }
+  const drawCrop=()=>{
+    const item=scans[scanIndex];if(!item)return
+    crop.querySelector('.crop-handles').replaceChildren(...item.corners.map((point,index)=>{
+      const handle=document.createElement('button');handle.type='button';handle.className='crop-handle';handle.textContent=String(index+1);handle.setAttribute('aria-label','Crop corner '+(index+1));handle.style.left=point[0]*100+'%';handle.style.top=point[1]*100+'%'
+      handle.onpointerdown=event=>{event.preventDefault();handle.setPointerCapture(event.pointerId)}
+      handle.onpointermove=event=>{if(!handle.hasPointerCapture(event.pointerId))return;const r=crop.getBoundingClientRect();item.corners[index]=[Math.max(0,Math.min(1,(event.clientX-r.left)/r.width)),Math.max(0,Math.min(1,(event.clientY-r.top)/r.height))];handle.style.left=item.corners[index][0]*100+'%';handle.style.top=item.corners[index][1]*100+'%'}
+      handle.onpointerup=()=>void showScan().catch(app.fail)
+      return handle
+    }))
+  }
   const handledHandoffs = new Set()
   const selected = () => {
     const state = app.get(), mark = state.current?.marks.find(mark => mark.id === selectedMark)
@@ -96,6 +130,57 @@ export function installTools(app) {
     const bounds = markBounds(marks), a = state.viewport.convertToViewportPoint(...bounds.slice(0, 2)), b = state.viewport.convertToViewportPoint(...bounds.slice(2))
     Object.assign(box.style, { left: Math.min(a[0], b[0]) - 5 + "px", top: Math.min(a[1], b[1]) - 5 + "px", width: Math.max(24, Math.abs(a[0] - b[0])) + 10 + "px", height: Math.max(24, Math.abs(a[1] - b[1])) + 10 + "px" })
   }
+  // A tap on existing ink selects it directly in normal PDF reading and editing modes.
+  const pdfSheet=$("pdf-sheet")
+  let inkTap, suppressInkClick
+  function inkAt(clientX,clientY){
+    const state=app.get()
+    if(!state.viewport||state.current?.extension!=="pdf")return
+    const rect=$("ink-canvas").getBoundingClientRect()
+    const viewport=state.viewport
+    const x=clientX-rect.left,y=clientY-rect.top
+    return state.current?.marks.findLast(mark=>{
+      if(mark.kind!=="ink"||mark.page!==state.page)return false
+      const radius=Math.max(12,(mark.width||1.7)*viewport.scale/2+6)
+      return mark.points.some((point,index)=>{
+        const [ax,ay]=viewport.convertToViewportPoint(...(mark.points[index-1]||point))
+        const [bx,by]=viewport.convertToViewportPoint(...point)
+        const dx=bx-ax,dy=by-ay,distance=dx*dx+dy*dy
+        const t=distance?Math.max(0,Math.min(1,((x-ax)*dx+(y-ay)*dy)/distance)):0
+        return Math.hypot(x-ax-t*dx,y-ay-t*dy)<=radius
+      })
+    })
+  }
+  function selectInk(mark){
+    selectedMark=mark.id
+    app.setMode("select")
+    updateSelection()
+  }
+  pdfSheet.addEventListener("pointerdown",event=>{
+    if(event.isPrimary&&event.button===0)inkTap={id:event.pointerId,x:event.clientX,y:event.clientY}
+  },true)
+  pdfSheet.addEventListener("pointercancel",()=>{inkTap=null},true)
+  pdfSheet.addEventListener("click",event=>{
+    if(!suppressInkClick||performance.now()-suppressInkClick.time>650)return
+    if(Math.hypot(event.clientX-suppressInkClick.x,event.clientY-suppressInkClick.y)>10)return
+    suppressInkClick=null
+    event.preventDefault()
+    event.stopImmediatePropagation()
+  },true)
+  pdfSheet.addEventListener("pointerup",event=>{
+    const tap=inkTap
+    inkTap=null
+    if(tap?.id!==event.pointerId||Math.hypot(event.clientX-tap.x,event.clientY-tap.y)>8)return
+    const state=app.get()
+    if(!state.viewport||!["read","edit"].includes(state.mode))return
+    if(event.target.closest("input,select,textarea,#selection-box"))return
+    const hit=inkAt(event.clientX,event.clientY)
+    if(!hit)return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    suppressInkClick={x:event.clientX,y:event.clientY,time:performance.now()}
+    selectInk(hit)
+  },true)
   on("ink-canvas", "pointerdown", async event => {
     const state = app.get()
     if (!state.viewport) return
@@ -134,7 +219,7 @@ export function installTools(app) {
   })
   let dragging
   on("selection-box", "pointerdown", event => {
-    if (event.target === $("selection-edit")) return
+    if (event.target === $("selection-edit") || event.button!==0) return
     const box = $("selection-box")
     box.setPointerCapture(event.pointerId)
     dragging = { pointer: event.pointerId, x: event.clientX, y: event.clientY, resize: event.target === $("selection-resize"), width: box.getBoundingClientRect().width }
@@ -147,6 +232,7 @@ export function installTools(app) {
     if (!dragging || event.pointerId !== dragging.pointer) return
     const drag = dragging; dragging = null
     $("selection-box").style.transform = ""
+    if(Math.hypot(event.clientX-drag.x,event.clientY-drag.y)<3)return
     const viewport = app.get().viewport, a = viewport.convertToPdfPoint(drag.x, drag.y), b = viewport.convertToPdfPoint(event.clientX, event.clientY)
     await app.edit({ kind: "transform", target: selectedMark, action: "apply", dx: drag.resize ? 0 : b[0] - a[0], dy: drag.resize ? 0 : b[1] - a[1], scale: drag.resize ? Math.max(.1, Math.min(10, 1 + (event.clientX - drag.x) / drag.width)) : 1 })
     updateSelection()
@@ -194,7 +280,7 @@ export function installTools(app) {
     }
   }
   on("save-original", "click", async () => {
-    document.activeElement?.blur(); await app.pending()
+    document.activeElement?.blur(); await app.ensureSynced()
     const state = app.get()
     if (!state.current) return
     if (window.desktopDocs) {
@@ -272,7 +358,12 @@ export function installTools(app) {
   on("review", "click", async () => {
     const state = app.get(), comments = await (await app.request("/api/review/" + state.current.id + "/" + state.page)).json()
     $("review-parent").replaceChildren(new Option("New comment", ""), ...comments.map(comment => new Option(comment.text.slice(0, 70) || comment.type, comment.id)))
-    $("review-list").replaceChildren(...comments.map(comment => { const item = document.createElement("p"); item.textContent = (comment.replyTo ? "Reply · " : "") + comment.type + ": " + comment.text; return item }))
+    $("review-list").replaceChildren(...comments.map(comment => {
+      const item = document.createElement("p"), label=document.createElement('span'); label.textContent = (comment.replyTo ? "Reply · " : "") + comment.type + ": " + comment.text; item.append(label)
+      const toggle = document.createElement('button'); toggle.textContent = comment.resolved ? 'Reopen comment' : 'Resolve comment'
+      toggle.onclick = async () => { try { const latest=app.get(); await app.edit({kind:'review',action:'resolve',target:comment.id,resolved:!comment.resolved,page:state.page,version:latest.current.contentVersion}); $('review-dialog').close(); $('review').click() } catch(error) { app.fail(error) } }
+      item.append(toggle); return item
+    }))
     $("review-dialog").showModal()
   })
   on("review-place", "click", () => {
@@ -300,14 +391,29 @@ export function installTools(app) {
     $("pdf-image-dialog").close(); $("pdf-image-file").value = ""; app.invalidate(); await app.refresh()
   })
 
+  let selectionToolbar = false
+  document.addEventListener('pointerdown', event => {
+    selectionToolbar = Boolean(event.target.closest('#toolbar, .tool-menu, #word-format-dialog'))
+    if (event.target.closest('#word-sheet')) { selectionToolbar = false; wordSelection = null }
+  }, true)
+  document.addEventListener('keydown', event => {
+    if (event.target.closest('#word-sheet')) {
+      if (event.key === 'Escape' || event.ctrlKey || event.metaKey || event.altKey) return
+      selectionToolbar = event.key === 'Tab'
+      if (!selectionToolbar) wordSelection = null
+    }
+  }, true)
   document.addEventListener("selectionchange", () => {
     const selection = getSelection()
-    if (!selection.rangeCount || selection.isCollapsed) return
+    if (!selection.rangeCount || selection.isCollapsed) { if (!selectionToolbar) wordSelection = null; return }
     const range = selection.getRangeAt(0), node = range.commonAncestorContainer.nodeType === 1 ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement
     const paragraph = node.closest("[data-word-index]")
-    if (!paragraph || !$("word-sheet").contains(paragraph)) return
+    if (!paragraph || !$("word-sheet").contains(paragraph)) {
+      if (!document.activeElement?.closest('#word-ribbon, #word-format-dialog, .tool-menu')) wordSelection = null
+      return
+    }
     const prefix = range.cloneRange(); prefix.selectNodeContents(paragraph); prefix.setEnd(range.startContainer, range.startOffset)
-    wordSelection = { index: Number(paragraph.dataset.wordIndex), start: prefix.toString().length, end: prefix.toString().length + range.toString().length, document: app.get().current?.id }
+    wordSelection = { index: Number(paragraph.dataset.wordIndex), start: prefix.toString().length, end: prefix.toString().length + range.toString().length, document: app.get().current?.id, version: app.get().current?.contentVersion }
   })
   const wordAction = async change => {
     document.activeElement?.blur(); await app.pending()
@@ -338,17 +444,32 @@ export function installTools(app) {
   async function previewScan() {
     const item = scans[scanIndex], sequence = ++scanPreviewSequence
     if (!item) return
-    const { prepareImage } = await import("./scan-runtime.mjs")
-    const blob = await prepareImage(item.file, item)
-    if (sequence !== scanPreviewSequence || item !== scans[scanIndex] || !$("scan-dialog").open) return
     const image = $("scan-preview")
-    if (image.src.startsWith("blob:")) URL.revokeObjectURL(image.src)
-    image.src = URL.createObjectURL(blob); image.style.transform = "none"
+    image.setAttribute('aria-busy', 'true')
+    let replacement
+    try {
+      await checkPhoto(item.file)
+      const { prepareImage } = await import("./scan-runtime.mjs")
+      const blob = await prepareImage(item.file, item)
+      replacement = URL.createObjectURL(blob)
+      const decoded = new Image(); decoded.src = replacement; await decoded.decode()
+      if (sequence !== scanPreviewSequence || item !== scans[scanIndex] || !$("scan-dialog").open) return
+      const previous = image.src
+      image.src = replacement; replacement = null; image.style.transform = "none"
+      await image.decode()
+      if (previous.startsWith('blob:')) URL.revokeObjectURL(previous)
+    } finally {
+      if (replacement) URL.revokeObjectURL(replacement)
+      if (sequence === scanPreviewSequence) image.setAttribute('aria-busy', 'false')
+    }
   }
   async function showScan() {
+    await retainScan()
     const item = scans[scanIndex]
     if (!item) return
+    if(cropUrl)URL.revokeObjectURL(cropUrl);cropUrl=URL.createObjectURL(item.file);crop.querySelector('img').src=cropUrl;drawCrop()
     const image = $("scan-preview")
+    image.setAttribute('aria-busy', 'true')
     if (image.src.startsWith("blob:")) URL.revokeObjectURL(image.src)
     image.src = URL.createObjectURL(item.file); image.style.transform = "rotate(" + item.angle + "deg)"
     $("scan-angle").value = item.angle; $("scan-angle-value").textContent = item.angle + "°"; $("scan-filter").value = item.filter
@@ -360,12 +481,15 @@ export function installTools(app) {
     const remove = document.createElement("button"); remove.textContent = "Remove page"; remove.disabled = scans.length <= 1
     remove.onclick = () => { scans.splice(scanIndex, 1); scanIndex = Math.min(scanIndex, scans.length - 1); void showScan().catch(app.fail) }
     $("scan-pages").append(remove)
+    for(const [label,delta] of [['Move earlier',-1],['Move later',1]]){
+      const b=document.createElement('button');b.textContent=label;b.disabled=!scans[scanIndex+delta];b.onclick=()=>{saveScanSettings();[scans[scanIndex],scans[scanIndex+delta]]=[scans[scanIndex+delta],scans[scanIndex]];scanIndex+=delta;void showScan().catch(app.fail)};$('scan-pages').append(b)
+    }
     $("scan-corners").replaceChildren(...item.corners.map((point, index) => {
       const label = document.createElement("label"); label.textContent = ["Top left", "Top right", "Bottom right", "Bottom left"][index] + " (x%, y%)"
       const row = document.createElement("div"); row.className = "actions"
       for (let axis = 0; axis < 2; axis++) {
         const input = document.createElement("input"); input.type = "number"; input.min = 0; input.max = 100; input.step = .1; input.value = (point[axis] * 100).toFixed(1); input.setAttribute("aria-label", label.textContent + (axis ? " y" : " x"))
-        input.oninput = () => { item.corners[index][axis] = Number(input.value) / 100 }; row.append(input)
+        input.oninput = () => { item.corners[index][axis] = Number(input.value) / 100; void retainScan().catch(app.fail) }; row.append(input)
       }
       label.append(row); return label
     }))
@@ -376,6 +500,7 @@ export function installTools(app) {
     const item = scans[scanIndex]
     if (item) { item.angle = Number($("scan-angle").value); item.filter = $("scan-filter").value }
     if (item) for (const key of ["brightness", "contrast", "sharpness", "whitening"]) item[key] = Number($("scan-" + key).value)
+    if (item) void retainScan().catch(app.fail)
   }
   for (const key of ["filter", "angle", "brightness", "contrast", "sharpness", "whitening"]) on("scan-" + key, "change", async () => { saveScanSettings(); await previewScan() })
   on("scan-reset", "click", async () => { const item = scans[scanIndex]; Object.assign(item, { filter: "photo", angle: 0, brightness: 0, contrast: 0, sharpness: 0, whitening: 0, corners: [[0,0],[1,0],[1,1],[0,1]] }); await showScan() })
@@ -386,10 +511,11 @@ export function installTools(app) {
     scans[scanIndex].corners = await detectCorners(scans[scanIndex].file); await showScan()
     app.status("Page corners estimated. Review and adjust the crop before creating the PDF.")
   })
-  return { updated: updateSelection, receiveHandoff, acceptPendingHandoff,
+  installWordRibbon({...app,selection:()=>wordSelection})
+  return { updated: updateSelection, inkAt, selectInk, receiveHandoff, acceptPendingHandoff,
     selection: () => wordSelection,
     splitParagraph: async (index, offset) => { await wordAction({ action: "split", index, offset }); app.selectWord(index + 1); await app.renderWord(); $("word-sheet").querySelector('[data-word-index="' + (index + 1) + '"]')?.focus() },
-    addScan: async file => { if (!$("scan-dialog").open) scans = []; if (scans.length >= 30) throw new Error("Keep at most 30 scan pages."); const { defaultCorners } = await import("./scan-runtime.mjs"); scans.push({ file, angle: 0, corners: defaultCorners(), filter: "document" }); scanIndex = scans.length - 1; await showScan() },
-    clearScans: () => { scans = [] },
-    createScan: async () => { saveScanSettings(); return (await import("./scan-runtime.mjs")).imagesToPdf(scans) } }
+    addScan: async file => { await scanReady; if (!$("scan-dialog").open && !scans.length && recoveredScan?.scans?.length) { scans = recoveredScan.scans; scanIndex = recoveredScan.scanIndex || 0; recoveredScan = null } if (!$("scan-dialog").open) {replacingScan=false} if (scans.length >= 30&&!replacingScan) throw new Error("Keep at most 30 scan pages."); const { defaultCorners } = await import("./scan-runtime.mjs"); const item={file,angle:0,corners:defaultCorners(),filter:'document'};if(replacingScan&&scans[scanIndex])scans[scanIndex]=item;else{scans.push(item);scanIndex=scans.length-1}replacingScan=false;await showScan() },
+    clearScans: () => { scans = []; recoveredScan = null; void retainScan().catch(app.fail) },
+    createScan: async () => { saveScanSettings(); await retainScan(); return (await import("./scan-runtime.mjs")).imagesToPdf(scans) } }
 }

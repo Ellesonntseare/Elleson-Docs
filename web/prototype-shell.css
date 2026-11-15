@@ -1,0 +1,113 @@
+/* Shared phone and Windows editor shell. */
+
+  .modern-interface.compact-menus{--sheet-paper:#fff;--sheet-text:#0f172a;--sheet-line:#e2e8f0;--keyboard-gap:0px;grid-template-rows:48px 0 minmax(0,1fr) 0}
+  .modern-interface.dark-interface{--sheet-paper:#172334;--sheet-text:#e2e8f0;--sheet-line:#334155}
+  .modern-interface .app-header{min-height:0;height:48px;box-sizing:border-box;padding:2px 8px;display:grid;grid-template-columns:40px minmax(0,1fr) repeat(3,40px);align-items:center;gap:2px;background:var(--sheet-paper);border-color:var(--sheet-line);z-index:21}
+  .modern-interface .app-header>.actions{display:contents}
+  .modern-interface .app-header>.brand,.modern-interface #save-state,
+  .modern-interface .app-header>.actions>#open,.modern-interface .app-header>.actions>#save-original{display:none}
+  .modern-interface .app-header>#recovery-warning:not([hidden]){position:fixed;top:50px;left:8px;right:8px;z-index:21}
+  .modern-interface .mobile-document-title{display:flex;gap:7px;align-items:center;grid-column:2;grid-row:1;min-width:0;min-height:40px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left;padding:0 8px;border:0;background:none;color:var(--sheet-text);font-size:12px;font-weight:700}
+  .mobile-document-title::before{content:'';width:7px;height:7px;flex:0 0 7px;background:#fbbf24;border-radius:50%}
+  .mobile-document-title[data-connected=true]::before{background:#10b981;box-shadow:0 0 8px #10b98170}
+  .modern-interface .app-header>.actions>.mobile-file-sheet{grid-column:1;grid-row:1}
+  .modern-interface #history-undo{grid-column:3;grid-row:1}
+  .modern-interface #history-redo{grid-column:4;grid-row:1}
+  .modern-interface .app-header>.actions>.mobile-more-sheet{grid-column:5;grid-row:1}
+  .modern-interface .app-header>.actions>:is(button,details>summary){min-width:0}
+  .modern-interface .app-header>.actions>button,.modern-interface .app-header>.actions>details>summary{min-height:40px;height:40px;width:40px;padding:9px;border:0;background:transparent;color:#475569;display:grid;place-items:center;font-size:0;list-style:none}
+  .modern-interface .app-header>.actions>button .tool-icon,.modern-interface .app-header>.actions>details>summary .tool-icon{margin:0;width:20px;height:20px}
+  .modern-interface .mobile-file-sheet>summary{color:#047857!important}
+  .modern-interface .app-header>.actions>details>summary::-webkit-details-marker{display:none}
+  .modern-interface .workspace{grid-row:3}
+  .modern-interface .stage{background:#e2e8f0;padding:48px 6px 88px}
+  .modern-interface .status{grid-row:4;position:fixed;bottom:0;left:0;right:0;background:transparent;border:0;pointer-events:none;z-index:7}
+  .modern-interface #connection{display:none}
+  .modern-interface #status{max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:10px;color:#475569}
+  .modern-interface .toolbar:not([hidden]){grid-row:2;display:block;position:static;height:0;padding:0;border:0;box-shadow:none;background:none;overflow:visible}
+  .modern-interface .toolbar>.tool-menu>summary,.modern-interface .toolbar>#document-focus,
+  .modern-interface .toolbar>#document-filters,.modern-interface .toolbar>#drawing-done{display:none}
+  .modern-interface.mobile-controls-open .toolbar:not([hidden]){position:fixed;bottom:76px;left:8px;right:8px;z-index:18;height:auto;padding:8px;display:flex;flex-wrap:wrap;background:var(--sheet-paper);border:1px solid var(--sheet-line);border-radius:18px;box-shadow:0 10px 40px #0f172a33}
+  .modern-interface.mobile-controls-open .toolbar>.tool-menu>summary,
+  .modern-interface.mobile-controls-open .toolbar>:is(#document-focus,#document-filters,#drawing-done):not([hidden]){display:block}
+  .modern-interface .mobile-mode-dock:not([hidden]){position:fixed;left:max(16px,env(safe-area-inset-left));right:max(16px,env(safe-area-inset-right));bottom:calc(16px + env(safe-area-inset-bottom));z-index:17;display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:6px;border-radius:999px;background:#0f172aed;backdrop-filter:blur(12px);box-shadow:0 10px 30px #0f172a59;border:1px solid #ffffff22;max-width:480px;margin-inline:auto}
+  .modern-interface .mobile-mode-dock button{min-height:40px;min-width:0;display:flex;align-items:center;justify-content:center;gap:4px;padding:4px 5px;border:0;border-radius:999px;background:none;color:#cbd5e1;font-size:12px;font-weight:700}
+  .mobile-mode-dock .tool-icon{width:16px;height:16px;margin:0}
+  .modern-interface .mobile-mode-dock button[aria-pressed=true]{background:#10b981;color:#0f172a;box-shadow:none}
+  .modern-interface #quick-page{position:fixed;right:12px;top:62px;z-index:15;border-radius:999px;min-height:34px;padding:4px 11px;background:#0f172adc;color:white;border:1px solid #ffffff22;box-shadow:0 4px 12px #0f172a30;font-size:11px}
+  .mobile-zoom-pill{display:flex;position:fixed;bottom:80px;right:12px;z-index:14;border-radius:999px;padding:3px;background:#fff;border:1px solid #e2e8f0;box-shadow:0 4px 14px #0f172a20}
+  .modern-interface .mobile-zoom-pill button{min-height:36px;min-width:34px;padding:3px 5px;border:0;background:none}
+  .mobile-sheet-backdrop:not([hidden]){display:block;position:fixed;inset:0;background:#02061766;backdrop-filter:blur(1px);z-index:20}
+  .modern-interface .tool-menu[open]>.tool-menu-panel{position:fixed;top:auto;bottom:calc(10px + env(safe-area-inset-bottom));left:8px;right:8px;background:var(--sheet-paper);color:var(--sheet-text);border:1px solid var(--sheet-line);border-radius:24px;box-shadow:0 18px 55px #0f172a46;max-height:min(74dvh,620px);overflow:auto;z-index:23;padding:18px 14px}
+  .modern-interface .mobile-file-sheet[open]>.tool-menu-panel{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .modern-interface .mobile-more-sheet[open]>.tool-menu-panel{top:58px;bottom:auto;border-radius:24px}
+  .modern-interface .mobile-open-files{display:grid;grid-column:1/-1;gap:5px;padding:8px;background:#f1f5f9;color:#334155;border-radius:12px;font-size:12px;font-weight:700}
+  .modern-interface #mobile-tabs:not([hidden]){display:block;max-width:100%;width:100%}
+  .modern-interface .mobile-save-card{grid-column:1/-1;min-height:48px;background:#047857;color:#fff}
+  .modern-interface .mobile-sync-card{display:block;width:100%;padding:14px;border-radius:16px;background:#0f172a;color:#fff;font-size:13px;font-weight:650}
+  .modern-interface .mobile-only:not([hidden]){display:block}
+  .modern-interface .mobile-drawing-sheet[open]>.tool-menu-panel{bottom:calc(77px + env(safe-area-inset-bottom));max-height:42dvh;z-index:19;padding:9px 12px;border-radius:20px}
+  .modern-interface .mobile-ink-actions{display:flex;width:100%;justify-content:space-between;gap:4px}
+  .mobile-drawing-sheet .tool-menu-panel:not(.ink-settings-expanded)>label,
+  .mobile-drawing-sheet .tool-menu-panel:not(.ink-settings-expanded)>.actions{display:none}
+  .modern-interface.mobile-editing .mobile-edit-ribbon{display:flex;gap:4px;position:fixed;bottom:calc(7px + var(--keyboard-gap));left:8px;right:8px;z-index:18;background:var(--sheet-paper);border:1px solid var(--sheet-line);border-radius:16px;padding:4px;box-shadow:0 6px 22px #0f172a26}
+  .mobile-editing .mobile-mode-dock,.mobile-editing .mobile-zoom-pill{display:none!important}
+  .modern-interface.mobile-editing .tool-menu[open]:has(#word-ribbon)>.tool-menu-panel{bottom:calc(58px + var(--keyboard-gap));max-height:42dvh}
+  .modern-interface :is(#update-dialog,#extras-dialog){margin:auto 0 0;width:100%;max-width:none;border-radius:26px 26px 0 0;border-bottom:0;max-height:82dvh;box-sizing:border-box;background:var(--sheet-paper);color:var(--sheet-text)}
+  .mobile-tools-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;padding:4px;background:#f1f5f9;border-radius:14px}
+  .mobile-tools-tabs button{padding:4px;font-size:11px;min-height:40px}
+  .modern-interface.focus-reading .mobile-mode-dock{display:none}
+  .modern-interface.focus-reading .stage{padding:6px}
+
+
+  .modern-interface.mobile-sheet-open .toolbar:not([hidden]){z-index:22}
+  .modern-interface .mobile-drawing-sheet .mobile-ink-actions button{min-height:36px;padding:5px 9px}
+  .modern-interface .mobile-document-title{display:block;position:relative;padding-left:17px}
+  .modern-interface .mobile-document-title::before{position:absolute;left:4px;top:17px}
+  .modern-interface.focus-reading .mobile-zoom-pill,.modern-interface.focus-reading #quick-page{display:none}
+  .modern-interface .mobile-open-files:has(#mobile-tabs[hidden]){display:none}
+
+
+  .modern-interface #page-jump-dialog{position:fixed;inset:100px 10px auto auto;width:min(290px,calc(100vw - 20px));margin:0;background:var(--sheet-paper);color:var(--sheet-text);border-radius:20px}
+  .modern-interface #page-jump-dialog h2{font-size:15px;margin:0 0 12px}
+  .modern-interface #page-jump-dialog form{display:flex;gap:8px;align-items:center;margin-bottom:10px}
+  .modern-interface #page-jump-dialog input[type=number]{width:50px}
+  .mobile-sheet-heading{display:flex;align-items:center;justify-content:space-between;font-size:17px;font-weight:750;grid-column:1/-1;width:100%}
+  .mobile-sheet-heading button{min-height:34px;font-size:11px;padding:5px 10px}
+  .mobile-quick-tools:not([hidden]){display:flex;gap:6px;flex-wrap:wrap;width:100%}
+  .modern-interface .mobile-file-sheet [for],.modern-interface .mobile-file-sheet .flatten-choice{grid-column:1/-1}
+  .modern-interface #update-dialog #installed-version,.modern-interface #update-dialog #offered-version:not([hidden]){display:inline-block;margin:6px 2px;padding:8px 10px;border-radius:12px;background:#f1f5f9;color:#334155;font-size:12px;font-weight:650}
+  .modern-interface #update-dialog [role=status]{background:#ecfdf5;color:#065f46;padding:12px;border-radius:14px}
+  .modern-interface #update-dialog #update-download:not([disabled]){background:#047857;color:#fff}
+
+
+  .modern-interface.mobile-sheet-open .mobile-zoom-pill,.modern-interface.mobile-sheet-open #quick-page{visibility:hidden}
+  .modern-interface .stage{padding-top:34px}
+
+
+  .modern-interface .status{opacity:0}
+  .modern-interface .mobile-toast:not([hidden]){display:block;position:fixed;top:55px;left:50%;transform:translateX(-50%);max-width:calc(100vw - 32px);padding:8px 12px;border-radius:999px;background:#0f172aed;color:white;box-shadow:0 4px 14px #0f172a35;font-size:11px;text-align:center;z-index:24;pointer-events:none}
+  .modern-interface .mobile-sheet-open .mobile-toast{visibility:hidden}
+
+
+ .modern-interface .status:has(.mobile-toast-active){opacity:1;top:55px;bottom:auto;left:50%;right:auto;transform:translateX(-50%);width:max-content;max-width:calc(100vw - 32px);z-index:24}
+ .modern-interface #status.mobile-toast-active{padding:8px 12px;border-radius:999px;background:#0f172aed;color:white;box-shadow:0 4px 14px #0f172a35;font-size:11px;text-align:center}
+ .modern-interface.mobile-sheet-open .status{opacity:0}
+
+
+  .modern-interface #word-ink-editor{margin:auto 0 0;width:100%;max-width:none;border-radius:26px 26px 0 0;box-sizing:border-box;background:var(--sheet-paper);color:var(--sheet-text)}
+
+@media(min-width:601px){
+  .modern-interface .app-header{padding-inline:18px;grid-template-columns:44px minmax(0,1fr) repeat(3,44px)}
+  .modern-interface .mobile-document-title{font-size:14px}
+  .modern-interface #document-tabs{display:none}
+  .modern-interface .stage{padding:30px 28px 88px}
+  .modern-interface .tool-menu[open]>.tool-menu-panel{left:50%;right:auto;transform:translateX(-50%);width:min(540px,calc(100vw - 32px))}
+  .modern-interface .mobile-more-sheet[open]>.tool-menu-panel{left:auto;right:18px;transform:none;width:min(375px,calc(100vw - 36px))}
+  .modern-interface .mobile-drawing-sheet[open]>.tool-menu-panel{width:min(520px,calc(100vw - 36px))}
+  .modern-interface.mobile-controls-open .toolbar:not([hidden]){left:50%;right:auto;transform:translateX(-50%);width:min(580px,calc(100vw - 32px))}
+  .modern-interface #quick-page{right:22px}
+  .modern-interface :is(#update-dialog,#extras-dialog,#word-ink-editor){left:50%;right:auto;transform:translateX(-50%);width:min(550px,calc(100vw - 32px));max-width:none}
+  .modern-interface .mobile-zoom-pill{bottom:21px;right:22px}
+  .modern-interface #page-jump-dialog{right:22px}
+}

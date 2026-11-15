@@ -20,7 +20,9 @@ test("undo and redo restore PDF changes and Word text after exporting", async ()
   }
   try {
     const pdf = await PDFDocument.create()
-    pdf.addPage().drawText("Original heading", { x: 40, y: 700, size: 16 })
+    const page = pdf.addPage()
+    page.drawText("Original heading", { x: 40, y: 700, size: 16 })
+    pdf.getForm().createTextField('Sample').addToPage(page,{x:40,y:600,width:180,height:24})
     await host.open("history.pdf", Buffer.from(await pdf.save()))
     await edit({ kind: "text", page: 1, at: [40, 300], angle: 0, size: 12, value: "First entry" })
     await edit({ kind: "field", name: "Sample", value: "Changed" })

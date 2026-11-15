@@ -1,3 +1,4 @@
+const { clickTool } = require('./menu-helper.cjs')
 const { test } = require("node:test")
 const assert = require("node:assert/strict")
 const fs = require("node:fs/promises")
@@ -20,6 +21,7 @@ test("long PDFs and image-heavy Word files render with rapid navigation cancelli
     await screen.getByText("PDF ready", { exact: true }).waitFor()
     results.pdf120PagesOpenMs = Math.round(performance.now() - started)
     const navigation = performance.now()
+    await screen.locator('summary').filter({hasText:/^View & pages$/}).click()
     await screen.getByRole("spinbutton", { name: "Page number", exact: true }).fill("120")
     await screen.getByRole("spinbutton", { name: "Page number", exact: true }).press("Enter")
     await screen.locator("#selection-layer").getByText("Long document page 120", { exact: true }).waitFor()

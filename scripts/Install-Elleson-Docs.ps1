@@ -16,7 +16,7 @@ New-Item -Path "$registration\shell\open\command" -Force | Out-Null
 Set-Item -LiteralPath "$registration\shell\open\command" -Value ('"' + $application + '" "%1"')
 New-ItemProperty -LiteralPath $registration -Name FriendlyAppName -Value 'Elleson Docs' -PropertyType String -Force | Out-Null
 New-Item -Path "$registration\SupportedTypes" -Force | Out-Null
-foreach ($extension in @('.pdf', '.doc', '.docx')) {
+foreach ($extension in @('.pdf', '.doc', '.docx', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp')) {
   New-ItemProperty -LiteralPath "$registration\SupportedTypes" -Name $extension -Value '' -PropertyType String -Force | Out-Null
 }
 Start-Process -FilePath $application

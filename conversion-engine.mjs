@@ -36,6 +36,21 @@ export async function wordBytes(text, images = []) {
   for (const image of images) children.push(new Paragraph({ children: [new ImageRun({ data: image.bytes, type: 'png', transformation: { width: image.width, height: image.height } })] }))
   return new Uint8Array(await Packer.toArrayBuffer(new Document({ sections: [{ children }] })))
 }
+export async function searchablePdf(images, recognize, check = () => {}) {
+  const pdf=await PDFDocument.create(),font=await pdf.embedFont(StandardFonts.Helvetica)
+  for(const item of images){
+    check();const image=await pdf.embedPng(item.bytes),scale=Math.min(595/image.width,842/image.height),width=image.width*scale,height=image.height*scale
+    const page=pdf.addPage([width,height]);page.drawImage(image,{x:0,y:0,width,height})
+    const data=await recognize(new Blob([item.bytes],{type:'image/png'}));check()
+    for(const block of data.blocks||[])for(const paragraph of block.paragraphs||[])for(const line of paragraph.lines||[])for(const word of line.words||[]){
+      const text=word.text?.trim();if(!text)continue
+      try{font.encodeText(text)}catch{throw new Error('Some recognised characters need a font not yet supported for searchable PDFs. Export reviewed Word text instead.')}
+      const box=word.bbox,size=Math.max(2,(box.y1-box.y0)*scale*.85)
+      page.drawText(text,{x:box.x0*scale,y:height-box.y1*scale,size:Math.min(size,(box.x1-box.x0)*scale/Math.max(.1,font.widthOfTextAtSize(text,1))),font,opacity:0})
+    }
+  }
+  return pdf.save()
+}
 export function wordText(bytes) {
   const data = unzipSync(bytes), xml = data['word/document.xml']
   if (!xml) throw new Error('This is not a supported DOCX document.')
@@ -65,16 +80,38 @@ export async function textPdf(text, options) {
   }
   return new Uint8Array(await pdf.save())
 }
-export async function imageData(file) {
+export async function imageData(file, maxSide = Infinity) {
   const image = await createImageBitmap(file, { imageOrientation: 'from-image' })
   try {
     if (image.width * image.height > 60000000) throw new Error('Image is too large. Resize it below 60 megapixels.')
-    const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height
-    canvas.getContext('2d').drawImage(image, 0, 0)
-    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'))
-    return { bytes: new Uint8Array(await blob.arrayBuffer()), width: image.width, height: image.height }
+    const scale=Math.min(1,maxSide/Math.max(image.width,image.height))
+    const canvas = document.createElement('canvas')
+    canvas.width=Math.max(1,Math.round(image.width*scale))
+    canvas.height=Math.max(1,Math.round(image.height*scale))
+    canvas.getContext('2d').drawImage(image,0,0,canvas.width,canvas.height)
+    const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'))
+    if(!blob)throw Error('Could not prepare this picture.')
+    return {bytes:new Uint8Array(await blob.arrayBuffer()),width:canvas.width,height:canvas.height}
   } finally { image.close() }
 }
+export async function picturePagePdf(file) {
+  let picture
+  try{picture=await imageData(file,3200)}
+  catch(error){
+    if(error.name==='InvalidStateError'||error.name==='EncodingError')throw Error('This picture could not be decoded. Check that the file opens in your photo viewer.')
+    throw error
+  }
+  const pdf=await PDFDocument.create()
+  const image=await pdf.embedPng(picture.bytes)
+  const scale=Math.min(.75,842/Math.max(image.width,image.height))
+  const width=image.width*scale,height=image.height*scale
+  const page=pdf.addPage([width,height])
+  page.drawImage(image,{x:0,y:0,width,height})
+  const bytes=await pdf.save()
+  if(bytes.length>40*1024*1024)throw Error('This picture is too large for a PDF. Resize it and try again.')
+  return bytes
+}
+
 export async function imagePdf(file, options) {
   const pdf = await PDFDocument.create(), image = await pdf.embedPng((await imageData(file)).bytes), size = pageSize(options), page = pdf.addPage(size)
   const margin = Number(options.margin ?? 12) * 72 / 25.4, width = size[0] - margin * 2, height = size[1] - margin * 2

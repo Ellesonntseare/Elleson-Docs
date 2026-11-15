@@ -1,3 +1,4 @@
+const { clickTool } = require('./menu-helper.cjs')
 const { test } = require("node:test")
 const assert = require("node:assert/strict")
 const { chromium } = require("playwright")
@@ -15,8 +16,6 @@ test("phone queues edits through connection loss and resolves conflicting answer
     const pairing = await (await fetch(host.address + "/api/pairing", { method: "POST", headers, body: "{}" })).json()
     await pc.goto(host.address + "/#owner=" + host.owner)
     await phone.goto(host.address)
-    await phone.getByLabel("Pairing code").fill(pairing.code)
-    await phone.getByRole("button", { name: "Connect", exact: true }).click()
     await phone.getByText("PDF ready", { exact: true }).waitFor()
     await pc.getByText("PDF ready", { exact: true }).waitFor()
     await phone.context().setOffline(true)
@@ -25,7 +24,7 @@ test("phone queues edits through connection loss and resolves conflicting answer
     await phone.waitForFunction(() => JSON.parse(localStorage.getItem("elleson-pending-edits") || "[]").length === 1)
     await pc.getByRole("textbox", { name: "Answer", exact: true }).fill("Changed on PC")
     await pc.getByRole("textbox", { name: "Answer", exact: true }).blur()
-    await pc.getByText("Change synced", { exact: true }).waitFor()
+    await pc.getByText("Change synced", { exact: true }).waitFor().catch(async error=>{throw Error(JSON.stringify({ui:await pc.evaluate(()=>({status:document.getElementById('status').textContent,fields:[...document.querySelectorAll('.pdf-field')].map(e=>({value:e.value,committed:e.lastCommitted})),drafts:localStorage.getItem('elleson-input-drafts-v1'),pending:localStorage.getItem('elleson-pending-edits')})),server:(await(await fetch(host.address+'/api/state',{headers})).json()).document}),{cause:error})})
     let conflict = false
     phone.once("dialog", async dialog => { conflict = true; await dialog.accept() })
     await phone.context().setOffline(false)
