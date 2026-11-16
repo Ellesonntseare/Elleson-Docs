@@ -244,7 +244,22 @@ export function organize(bytes, action, pages, extra) {
   }
   try {
     const count = document.countPages()
-    if (action === "combine") {
+    if (action === "plan") {
+      if (!Array.isArray(pages) || !pages.length || pages.length > 1000 || pages.some(item => !Number.isInteger(item.index) || item.index < 0 || item.index >= count || ![0,90,180,270].includes(item.rotation))) throw new Error("Choose a valid page arrangement.")
+      const used = new Set(), order = []
+      for (const item of pages) {
+        let index = item.index
+        if (used.has(index)) {
+          if (!incoming) { incoming = new mupdf.PDFDocument(bytes); incoming.bake(true,true) }
+          document.graftPage(-1,incoming,index); index = document.countPages()-1
+        }
+        used.add(item.index)
+        const object = document.findPage(index)
+        object.put("Rotate",(object.getInheritable("Rotate").asNumber()+item.rotation)%360)
+        order.push(index)
+      }
+      arrange(order)
+    } else if (action === "combine") {
       document.bake(true, true)
       incoming = new mupdf.PDFDocument(extra)
       incoming.bake(true, true)

@@ -14,7 +14,7 @@ const token = () => crypto.randomBytes(24).toString("base64url")
 const isPoint = value => Array.isArray(value) && value.length === 2 && value.every(number => Number.isFinite(number) && Math.abs(number) < 200000)
 const inkStyle = edit => ({
   color: /^#[a-f0-9]{6}$/i.test(edit.color || "") ? edit.color : "#093352",
-  width: [1, 2, 4, 8, 12].includes(edit.width) ? edit.width : 1.7,
+  width: Number.isFinite(edit.width) && edit.width >= .25 && edit.width <= 30 ? edit.width : 1.7,
   opacity: edit.opacity === .25 ? .25 : 1
 })
 const latinFont = PDFDocument.create().then(document => document.embedFont(StandardFonts.Helvetica))
@@ -163,6 +163,34 @@ async function start(port = 0, recoveryDirectory) {
     }
     response.json(results)
   })
+  web.get("/api/library/:id/preview/:version", async (request,response) => {
+    const saved=await library.read(request.params.id,request.params.version)
+    response.type(/\.pdf$/i.test(saved.filename)?'application/pdf':'application/vnd.openxmlformats-officedocument.wordprocessingml.document').send(saved.bytes)
+  })
+  web.post('/api/restore-checkpoint/:id',(request,response,next)=>{
+    const operation=editQueue.then(async()=>{
+      const current=document
+      if(current?.id!==request.params.id)return response.sendStatus(409)
+      // Read first: saving current work can trim the oldest retained version.
+      const saved=await library.read(current.libraryId,request.body.version)
+      const exported=await exportFile(current.id)
+      await library.save(current.filename.replace(/\.[^.]+$/,'.'+exported.extension),exported.bytes,current.libraryId)
+      await openNow(saved.filename,saved.bytes,false,current.libraryId)
+      response.json(snapshot(document))
+    });editQueue=operation.catch(()=>{});operation.catch(next)
+  })
+  web.post("/api/checkpoint/:id", async (request,response) => {
+    const operation=editQueue.then(async()=>{
+      const current=documents.get(request.params.id)
+      if(!current || current!==document)throw new Error('The open document changed.')
+      const exported=await exportFile(current.id)
+      current.libraryId=await library.save(current.filename.replace(/\.[^.]+$/,'.'+exported.extension),exported.bytes,current.libraryId)
+      revision++;await checkpoint()
+      return snapshot(current)
+    })
+    editQueue=operation.catch(()=>{})
+    response.json(await operation)
+  })
   web.get("/api/library/:id/versions", (request, response) => response.json(library.versions(request.params.id)))
   web.post("/api/library/:id/pin", async (request, response) => {
     await library.pin(request.params.id, request.body.pinned === true)
@@ -280,6 +308,13 @@ async function start(port = 0, recoveryDirectory) {
       await checkpoint()
       response.json({ lines: lines.length })
     } finally { recognizing = false }
+  })
+  web.post('/api/convert-word',express.raw({type:'application/octet-stream',limit:maxBytes}),async(request,response)=>{
+    if(!wordRenderer)return response.status(422).json({error:'Connect to the Windows app to convert Word files.'})
+    const name=decodeURIComponent(request.get('X-Filename')||'Document.docx'),extension=/\.doc$/i.test(name)?'doc':'docx'
+    const word=await readWord(request.body,extension)
+    const bytes=extension==='doc'?await saveWord(word,{},{}):request.body
+    response.type('application/pdf').send(Buffer.from(await wordRenderer(Array.from(bytes))))
   })
   web.post("/api/open", express.raw({ type: "application/octet-stream", limit: maxBytes }), async (request, response) => {
     if (!Buffer.isBuffer(request.body)) return response.status(400).json({ error: "Choose a document to open." })
@@ -403,6 +438,18 @@ async function start(port = 0, recoveryDirectory) {
     current.wordFormats = Object.create(null)
     current.contentVersion++
   }
+  web.post('/api/word-ink-batch/:id',(request,response,next)=>{
+    const operation=editQueue.then(async()=>{
+      const current=document,edit=request.body||{}
+      if(current?.id!==request.params.id||!current.word)return response.sendStatus(409)
+      if(current.applied.has(edit.id))return response.json(snapshot(current))
+      if(edit.version!==current.contentVersion)return response.status(409).json({error:'The document changed. Select the drawings again.'})
+      const before=history.capture(current)
+      const bytes=(await import('./word-format.mjs')).changeWordInkBatch(await saveWord(current.word,current.wordEdits,current.wordFormats),edit)
+      await applyWordBytes(current,bytes,false);history.remember(current,before,'drawing selection edit')
+      current.changeNumber++;current.applied.add(edit.id);revision++;await checkpoint();response.json(snapshot(current))
+    });editQueue=operation.catch(()=>{});operation.catch(next)
+  })
   web.post(['/api/word-erase/:id','/api/word-ink-edit/:id'],(request,response,next)=>{
     const operation=editQueue.then(async()=>{
       const current=document,{id,version,target,position}=request.body||{}
@@ -462,12 +509,13 @@ async function start(port = 0, recoveryDirectory) {
       history.restore(current, edit.kind === "history-undo" ? "undo" : "redo")
     } else if (edit.kind === "pages" && current.extension === "pdf" && edit.version === current.contentVersion) {
       const engine = await import("./pdf-edit.mjs")
-      const exported = await exportFile(current.id)
-      if (documents.get(current.id) !== current) return response.sendStatus(409)
+      const version = current.contentVersion
+      const exported = await exportFile(current.id, {excludeMarks:edit.action === "plan"})
+      if (documents.get(current.id) !== current || version !== current.contentVersion) return response.sendStatus(409)
       const result = engine.organize(exported.bytes, edit.action, edit.pages)
       current.bytes = result.bytes
       current.pages = result.pages
-      current.marks = []
+      current.marks = edit.action === "plan" ? edit.pages.flatMap((item,index) => current.marks.filter(mark => mark.page === item.index+1).map(mark => ({...mark,id:edit.id+"-"+index+"-"+mark.id,group:mark.group?edit.id+"-"+index+"-"+mark.group:undefined,page:index+1}))) : []
       current.fields = Object.create(null)
       current.originalFields = fieldValues(await PDFDocument.load(current.bytes))
       current.ocr = Object.create(null)
@@ -739,7 +787,7 @@ async function start(port = 0, recoveryDirectory) {
     const stem = path.basename(current.filename, path.extname(current.filename))
     const changeNumber = current.changeNumber
     let { extension, bytes } = current
-    const marks = [...current.marks]
+    const marks = options.excludeMarks ? [] : [...current.marks]
     const fields = Object.entries(current.fields)
     const wordEdits = { ...current.wordEdits }
     const wordFormats = structuredClone(current.wordFormats)
@@ -773,7 +821,7 @@ async function start(port = 0, recoveryDirectory) {
           }
         }
       }
-      if (options.flatten) pdf.getForm().flatten()
+      if (options.flatten) (await import('./pdf-fields.mjs')).flattenPdfForm(pdf)
       bytes = await pdf.save({ updateFieldAppearances: false })
     }
     return { filename: stem + (options.flatten ? " - final." : " - copy.") + extension, bytes, extension, changeNumber }

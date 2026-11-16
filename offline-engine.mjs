@@ -1,10 +1,10 @@
-import { fieldValues, sameValue, validFieldValue, setFieldValue } from './pdf-fields.mjs'
+import { fieldValues, sameValue, validFieldValue, setFieldValue, flattenPdfForm } from './pdf-fields.mjs'
 import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib"
 import { protectPdf } from "./pdf-protection.mjs"
 import { decoratePdf, documentInfo, needsPassword, unlockPdf, redactPdf, extractImages } from "./document-extras.mjs"
 import { unzipSync, zipSync, strFromU8, strToU8 } from "fflate"
 import { extract, replace, organize, scanImage, imageInfo } from "./pdf-edit.mjs"
-import { applyFormatting, ensureListParts, insertTable, insertImage, validFormat, changeWordInk, validInkPosition } from "./word-format.mjs"
+import { applyFormatting, ensureListParts, insertTable, insertImage, validFormat, changeWordInk, validInkPosition, changeWordInkBatch } from "./word-format.mjs"
 import { diffChars } from "diff"
 import { editWord } from "./word-tools.mjs"
 import { changeMarks } from "./mark-tools.mjs"
@@ -87,6 +87,10 @@ export async function install() {
     if (document.querySelector("parsererror")) throw new Error("This Word document could not be read.")
     return { archive, document }
   }
+  function refreshWordLines(){
+    const {document}=wordXml(),ns=document.documentElement.namespaceURI
+    file.lines=Array.from(document.getElementsByTagNameNS(ns,'p'),paragraph=>({text:Array.from(paragraph.getElementsByTagNameNS(ns,'t')).filter(node=>{let p=node.parentNode;while(p&&p.localName!=='p')p=p.parentNode;return p===paragraph}).map(node=>node.textContent).join(''),editable:paragraph.getElementsByTagNameNS(ns,'t').length>0,style:''}))
+  }
   async function source(table, image) {
     if (file.extension !== "docx" || !Object.keys(file.wordEdits).length && !Object.keys(file.wordFormats || {}).length && !table && !image) return file.bytes
     const { archive, document } = wordXml()
@@ -119,7 +123,7 @@ export async function install() {
     archive["word/document.xml"] = strToU8(new XMLSerializer().serializeToString(document))
     return zipSync(archive)
   }
-  async function exported(flatten) {
+  async function exported(flatten, excludeMarks = false) {
     if (file.extension === "docx") return source()
     const document = await PDFDocument.load(file.bytes)
     const font = await document.embedFont(StandardFonts.Helvetica)
@@ -130,7 +134,7 @@ export async function install() {
       setFieldValue(field, value)
     }
     form.updateFieldAppearances(font)
-    for (const mark of file.marks) {
+    for (const mark of excludeMarks ? [] : file.marks) {
       const page = document.getPage(mark.page - 1)
       const color = rgb(.035, .2, .32)
       if (mark.kind === "text") page.drawText(mark.value, {
@@ -142,7 +146,7 @@ export async function install() {
           end: { x: mark.points[index][0], y: mark.points[index][1] }, thickness: mark.width || 1.7, color: inkColor, opacity: mark.opacity ?? 1 })
       }
     }
-    if (flatten) form.flatten()
+    if (flatten) flattenPdfForm(document)
     return document.save()
   }
   async function handle(url, options) {
@@ -164,11 +168,26 @@ export async function install() {
       entries["index.json"] = strToU8(JSON.stringify(library.map(record => ({ ...record, versions: record.versions.map(({ bytes, ...version }) => version) }))))
       return new Response(zipSync(entries, { level: 1 }), { headers: { "Content-Type": "application/zip" } })
     }
+    if(action==='restore-checkpoint'){
+      if(file?.id!==parts[2])throw Error('The open document changed.')
+      const record=library.find(record=>record.id===file.libraryId),saved=record?.versions.find(version=>version.id===body.version)
+      if(!saved)throw Error('Saved version not found.')
+      const libraryId=file.libraryId;recordVersion(file,await exported(false));await persist()
+      return handle(new URL('/api/open',location.href),{headers:{'X-Filename':encodeURIComponent(saved.filename)},body:new Blob([saved.bytes]),libraryId})
+    }
+    if (action === "checkpoint") {
+      if(file?.id!==parts[2])throw Error('The open document changed.')
+      recordVersion(file,await exported(false));revision++;await persist();return Response.json(snapshot())
+    }
     if (action === "library") {
       const record = library.find(record => record.id === parts[2])
       if (!parts[2]) return Response.json(library.map(({ versions, ...record }) => ({ ...record, versionCount: versions.length }))
         .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated - a.updated))
       if (!record) throw new Error("Saved document not found.")
+      if(parts[3] === "preview") {
+        const version=record.versions.find(version=>version.id===parts[4]);if(!version)throw Error('Saved version not found.')
+        return new Response(version.bytes,{headers:{'Content-Type':/\.pdf$/i.test(version.filename)?'application/pdf':'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}})
+      }
       if (options.method === "DELETE") {
         if (parts[3] === "versions") {
           if (record.versions.at(-1).id === parts[4]) throw new Error("Keep the latest version or remove the whole document.")
@@ -262,6 +281,7 @@ export async function install() {
       await persist()
       return new Response(null, { status: 204 })
     }
+    if(action==='convert-word')return Response.json({error:'Connect to the Windows app to convert Word files.'},{status:422})
     if (!file || parts[2] !== file.id) return Response.json({ error: "The open document changed." }, { status: 409 })
     if (action === "rename") {
       const name = body.name
@@ -283,6 +303,13 @@ export async function install() {
     if (action === "source") return new Response(await source(), { headers: {
       "Content-Type": file.extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     } })
+    if(action==='word-ink-batch'){
+      if(file?.id!==parts[2]||!file.lines)throw Error('The open Word document changed.')
+      if(file.applied.includes(body.id))return Response.json(snapshot())
+      if(body.version!==file.contentVersion)throw Error('The document changed. Select the drawings again.')
+      const before=capture(file);file.bytes=changeWordInkBatch(await source(),body);file.wordEdits={};file.wordFormats={};refreshWordLines();file.contentVersion++
+      file.undo.push(before);file.redo=[];file.applied.push(body.id);file.changeNumber++;revision++;await persist();return Response.json(snapshot())
+    }
     if (action === 'word-erase' || action === 'word-ink-edit') {
       const {id,version,target,position}=JSON.parse(options.body||'{}')
       if(file.applied.includes(id))return Response.json(snapshot())
@@ -292,7 +319,7 @@ export async function install() {
       const bytes=changeWordInk(await source(),target,erase?undefined:position)
       if(!bytes)return new Response(null,{status:404})
       file.undo.push(capture(file));file.redo=[]
-      file.bytes=bytes;file.wordEdits={};file.wordFormats={}
+      file.bytes=bytes;file.wordEdits={};file.wordFormats={};refreshWordLines()
       file.contentVersion++;file.changeNumber++;file.applied.push(id);revision++
       await persist()
       return Response.json(snapshot())
@@ -429,7 +456,8 @@ export async function install() {
     } else {
       if (body.kind === "pages") {
         if (body.version !== file.contentVersion) throw new Error("The document changed.")
-        Object.assign(file, organize(await exported(false), body.action, body.pages), { marks: [], fields: {} })
+        const oldMarks=file.marks
+        Object.assign(file, organize(await exported(false, body.action === "plan"), body.action, body.pages), { marks: body.action === "plan" ? body.pages.flatMap((item,index)=>oldMarks.filter(mark=>mark.page===item.index+1).map(mark=>({...mark,id:body.id+"-"+index+"-"+mark.id,group:mark.group?body.id+"-"+index+"-"+mark.group:undefined,page:index+1}))) : [], fields: {} })
         file.originalFields = fieldValues(await PDFDocument.load(file.bytes))
         file.contentVersion++
       } else if (body.kind === "field") {
@@ -488,7 +516,7 @@ export async function install() {
         const group = file.marks.find(mark => mark.id === body.target)?.group
         file.marks = file.marks.filter(mark => group ? mark.group !== group : mark.id !== body.target)
       } else if (body.kind === "signature") file.marks.push(...body.strokes.map((points, index) => ({
-        id: body.id + "-" + index, group: body.id, kind: "ink", page: body.page, points, color: body.color, width: 2, opacity: 1
+        id: body.id + "-" + index, group: body.id, kind: "ink", page: body.page, points, color: /^#[a-f0-9]{6}$/i.test(body.color||"")?body.color:"#093352", width: Number.isFinite(body.width)&&body.width>=.25&&body.width<=30?body.width:2, opacity:body.opacity===.25?.25:1
       })))
       else if (["ink", "text"].includes(body.kind)) file.marks.push(body)
       else throw new Error("This change could not be applied.")

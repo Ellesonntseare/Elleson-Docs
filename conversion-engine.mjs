@@ -1,3 +1,4 @@
+import {flattenPdfForm} from './pdf-fields.mjs'
 import { PDFDocument, StandardFonts } from 'pdf-lib'
 import { Document, Paragraph, Packer, ImageRun } from 'docx'
 import { unzipSync, strFromU8, zipSync } from 'fflate'
@@ -126,6 +127,7 @@ export async function combinePdfs(inputs, check = () => {}) {
   for (const bytes of inputs) {
     check()
     const pdf = await PDFDocument.load(bytes)
+    if(pdf.getForm().getFields().length)flattenPdfForm(pdf)
     for (const page of await output.copyPages(pdf, pdf.getPageIndices())) output.addPage(page)
   }
   return new Uint8Array(await output.save())

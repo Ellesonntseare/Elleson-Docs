@@ -1,6 +1,6 @@
-ELLESON DOCS 0.4.10
+ELLESON DOCS 0.4.11
 
-Elleson Docs 0.4.10. See resources/app/UPDATE-STATUS.md for features and verification.
+Elleson Docs 0.4.11. See resources/app/UPDATE-STATUS.md for features and verification.
 New: Convert files, New documents, scanner filters, drawing Done, continuous
 reading, password-protected PDF copies, Save As, Rename, and easier pairing.
 More contains additional saving, scanning, printing and document actions.
@@ -14,7 +14,7 @@ Save a copy exports separately. External file changes require a choice.
 Ctrl+S saves; Ctrl+Shift+S saves a copy.
 
 ANDROID AND LIVE EDITING
-Install Elleson-Docs-Android-0.4.10.apk on Android 8 or newer.
+Install Elleson-Docs-Android-0.4.11.apk on Android 8 or newer.
 Open documents on phone works independently for PDF and DOCX.
 For live editing, keep Windows open and use the same trusted Wi-Fi.
 Open the phone app: it finds the PC and connects without codes or approval.
@@ -84,3 +84,12 @@ The matching source ZIP contains code and build scripts.
 Read README.md for detailed capabilities, limits and development steps.
 Elleson Docs includes MuPDF.js and uses AGPL-3.0-or-later.
 See NOTICE.md and LICENSE for details.
+
+NEW WORKSPACE TOOLS
+Open More for Pages, Combine documents, Drawing tools, Recovery history and
+Phone companion. These tools are available on Windows and Android.
+Pages arranges PDF pages. Convert Word to PDF first if you want to reorganise it.
+Drawing tools can select several app-added drawings and add shapes to Word or PDF.
+The scanner detects page edges automatically; review the crop before saving.
+Recovery history previews saved PDF and DOCX checkpoints before restoring them.
+Word files in Combine documents need the Windows app for layout conversion.

@@ -1,3 +1,6 @@
+import {installDocumentSuite} from './document-suite.mjs'
+import {installDrawingSuite} from './drawing-suite.mjs'
+import {installCompanion} from './companion-mode.mjs'
 import {openPictureAsPdf,pictureType} from './picture-import.mjs'
 import {installDocumentContext} from './document-context.mjs'
 import {installWheelZoom} from './wheel-zoom.mjs'
@@ -926,9 +929,9 @@ async function openFile() {
 $.open.addEventListener("click", () => void openFile().catch(fail))
 $.scan.addEventListener("click", () => $["scan-file"].click())
 $["scan-file"].addEventListener("change", async () => {
-  const selected = $["scan-file"].files[0]
-  if (!selected) return
-  await tools.addScan(selected)
+  try { for (const selected of $["scan-file"].files) await tools.addScan(selected) }
+  catch(error){fail(error)}
+  finally{$["scan-file"].value=""}
 })
 $["scan-cancel"].addEventListener("click", () => { $["scan-dialog"].close(); $["scan-file"].value = ""; tools.clearScans() })
 $["scan-angle"].addEventListener("input", () => {
@@ -1651,3 +1654,11 @@ installMobileNavigation({stage:$.stage,get:()=>current,getPage:()=>page,go,readi
 installMobileShell({get:()=>current,stage:$.stage,getPage:()=>page,readingView})
 
 installDocumentContext({get:()=>current,go,closeTab:id=>void closeTab(id).catch(fail),tools})
+
+const suiteApp={get:()=>current,role:()=>role,viewport:()=>viewport,page:()=>page,request,edit,editId,setMode,go,status,fail,pdfjs,renderWord,
+ pending:async()=>{document.activeElement?.blur();flushWord();await pendingEdit},
+ refresh:async()=>{revision=-1;await refresh()},
+ open:async(name,bytes)=>{document.activeElement?.blur();flushWord();await pendingEdit;await request('/api/open',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Filename':encodeURIComponent(name)},body:bytes});revision=-1;await refresh()}}
+const documentSuite=installDocumentSuite(suiteApp)
+const drawingSuite=installDrawingSuite(suiteApp,documentSuite)
+installCompanion(suiteApp,documentSuite,drawingSuite)

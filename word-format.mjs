@@ -265,3 +265,39 @@ export function changeWordInk(bytes,target,position){
   archive[part]=strToU8(new XMLSerializer().serializeToString(xml))
   return zipSync(archive)
 }
+
+export function changeWordInkBatch(bytes,edit){
+  if(!['apply','duplicate','delete'].includes(edit.action)||!Array.isArray(edit.items)||!edit.items.length||edit.items.length>200||! /^[a-zA-Z0-9-]{12,80}$/.test(edit.id||''))throw Error('Select valid drawings and an action.')
+  if(new Set(edit.items.map(item=>item.target)).size!==edit.items.length)throw Error('Select each drawing once.')
+  let result=bytes
+  for(const [index,item] of edit.items.entries()){
+    if(typeof item.target!=='string'||edit.action!=='delete'&&!validInkPosition(item.position))throw Error('Choose a valid drawing position.')
+    if(edit.action==='delete'){result=changeWordInk(result,item.target);if(!result)throw Error('The drawing changed. Select it again.');continue}
+    const archive=unzipSync(result),part='word/document.xml',rels='word/_rels/document.xml.rels',parser=new DOMParser(),xml=parser.parseFromString(strFromU8(archive[part]),'text/xml'),relationships=parser.parseFromString(strFromU8(archive[rels]),'text/xml')
+    const relation=Array.from(relationships.getElementsByTagNameNS('*','Relationship')).find(node=>node.getAttribute('Target')===item.target)
+    if(!relation)throw Error('The drawing changed. Select it again.')
+    const rid=relation.getAttribute('Id'),rns='http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    const drawing=Array.from(xml.getElementsByTagNameNS('*','drawing')).find(d=>Array.from(d.getElementsByTagNameNS('*','docPr')).some(p=>p.getAttribute('name')==='Elleson ink')&&Array.from(d.getElementsByTagNameNS('*','blip')).some(b=>b.getAttributeNS(rns,'embed')===rid))
+    if(!drawing)throw Error('Only drawings made in Elleson Docs can be edited here.')
+    let target=item.target
+    if(edit.action==='duplicate'){
+      if(!/^media\/[A-Za-z0-9_.-]+\.png$/i.test(target)||!archive['word/'+target])throw Error('The drawing image is unavailable.')
+      target='media/elleson-copy-'+edit.id+'-'+index+'.png'
+      const newId='rIdElleson'+edit.id.replace(/-/g,'')+index,copy=drawing.cloneNode(true),newRelation=relation.cloneNode(true)
+      newRelation.setAttribute('Id',newId);newRelation.setAttribute('Target',target);relationships.documentElement.appendChild(newRelation)
+      for(const b of Array.from(copy.getElementsByTagNameNS('*','blip')))b.setAttributeNS(rns,'r:embed',newId)
+      const next=Math.max(0,...Array.from(xml.getElementsByTagNameNS('*','docPr')).map(p=>Number(p.getAttribute('id'))||0))+1
+      for(const p of Array.from(copy.getElementsByTagNameNS('*','docPr')))p.setAttribute('id',String(next))
+      drawing.parentNode.appendChild(copy);archive['word/'+target]=archive['word/'+item.target]
+    }
+    if(item.png!==undefined){
+      if(typeof item.png!=='string'||item.png.length>6*1024*1024||!/^[A-Za-z0-9+/]*={0,2}$/.test(item.png)||!/^media\/[A-Za-z0-9_.-]+\.png$/i.test(target))throw Error('Choose a valid drawing image.')
+      const data=Uint8Array.from(atob(item.png),c=>c.charCodeAt(0));if(data[0]!==137||data[1]!==80||data[2]!==78||data[3]!==71)throw Error('Choose a PNG drawing.')
+      archive['word/'+target]=data
+    }
+    archive[part]=strToU8(new XMLSerializer().serializeToString(xml));archive[rels]=strToU8(new XMLSerializer().serializeToString(relationships))
+    result=changeWordInk(zipSync(archive),target,item.position)
+    if(!result)throw Error('The drawing changed. Select it again.')
+  }
+  return result
+}

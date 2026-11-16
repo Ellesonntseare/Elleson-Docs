@@ -92,6 +92,7 @@ export function installTools(app) {
   let cropUrl
   let replacingScan=false
   const retake=document.createElement('button');retake.textContent='Retake or replace this page';retake.onclick=()=>{replacingScan=true;$('scan-file').value='';$('scan-file').click()};$('scan-add').after(retake)
+  const importScans=document.createElement('input');importScans.type='file';importScans.accept='image/*';importScans.multiple=true;importScans.hidden=true;const importButton=document.createElement('button');importButton.textContent='Add photos from gallery';importButton.onclick=()=>importScans.click();importScans.onchange=async()=>{try{saveScanSettings();for(const file of importScans.files)await addScanFile(file)}catch(error){app.fail(error)}finally{importScans.value=''}};$('scan-add').after(importButton,importScans)
   const scanQuality=document.createElement('p');scanQuality.setAttribute('role','status');$('scan-preview').after(scanQuality)
   async function checkPhoto(file){
     const bitmap=await createImageBitmap(file),canvas=document.createElement('canvas');canvas.width=200;canvas.height=Math.max(20,Math.round(200*bitmap.height/bitmap.width));const ctx=canvas.getContext('2d');ctx.drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close()
@@ -476,6 +477,8 @@ export function installTools(app) {
     for (const key of ["brightness", "contrast", "sharpness", "whitening"]) $("scan-" + key).value = item[key] || 0
     $("scan-pages").replaceChildren(...scans.map((page, index) => {
       const button = document.createElement("button"); button.textContent = "Page " + (index + 1); button.setAttribute("aria-pressed", index === scanIndex)
+      const thumbnail=document.createElement('img');thumbnail.alt='';thumbnail.src=URL.createObjectURL(page.file);thumbnail.onload=()=>URL.revokeObjectURL(thumbnail.src);thumbnail.style.cssText='width:52px;height:64px;object-fit:contain;display:block';button.prepend(thumbnail)
+      button.draggable=true;button.ondragstart=event=>event.dataTransfer.setData('text/x-scan-index',String(index));button.ondragover=event=>event.preventDefault();button.ondrop=event=>{event.preventDefault();const value=event.dataTransfer.getData('text/x-scan-index');if(!/^\d+$/.test(value))return;const from=Number(value);if(from>=scans.length)return;saveScanSettings();const [moved]=scans.splice(from,1);scans.splice(index,0,moved);scanIndex=index;void showScan().catch(app.fail)}
       button.onclick = () => { saveScanSettings(); scanIndex = index; void showScan().catch(app.fail) }; return button
     }))
     const remove = document.createElement("button"); remove.textContent = "Remove page"; remove.disabled = scans.length <= 1
@@ -511,11 +514,12 @@ export function installTools(app) {
     scans[scanIndex].corners = await detectCorners(scans[scanIndex].file); await showScan()
     app.status("Page corners estimated. Review and adjust the crop before creating the PDF.")
   })
+  async function addScanFile(file) { await scanReady; if (!$("scan-dialog").open && !scans.length && recoveredScan?.scans?.length) { scans = recoveredScan.scans; scanIndex = recoveredScan.scanIndex || 0; recoveredScan = null } if (!$("scan-dialog").open) {replacingScan=false} if (scans.length >= 30&&!replacingScan) throw new Error("Keep at most 30 scan pages."); const { detectCorners } = await import("./scan-runtime.mjs"); app.status("Detecting page edges…"); const item={file,angle:0,corners:await detectCorners(file),filter:'document'};if(replacingScan&&scans[scanIndex])scans[scanIndex]=item;else{scans.push(item);scanIndex=scans.length-1}replacingScan=false;await showScan() }
   installWordRibbon({...app,selection:()=>wordSelection})
   return { updated: updateSelection, inkAt, selectInk, receiveHandoff, acceptPendingHandoff,
     selection: () => wordSelection,
     splitParagraph: async (index, offset) => { await wordAction({ action: "split", index, offset }); app.selectWord(index + 1); await app.renderWord(); $("word-sheet").querySelector('[data-word-index="' + (index + 1) + '"]')?.focus() },
-    addScan: async file => { await scanReady; if (!$("scan-dialog").open && !scans.length && recoveredScan?.scans?.length) { scans = recoveredScan.scans; scanIndex = recoveredScan.scanIndex || 0; recoveredScan = null } if (!$("scan-dialog").open) {replacingScan=false} if (scans.length >= 30&&!replacingScan) throw new Error("Keep at most 30 scan pages."); const { defaultCorners } = await import("./scan-runtime.mjs"); const item={file,angle:0,corners:defaultCorners(),filter:'document'};if(replacingScan&&scans[scanIndex])scans[scanIndex]=item;else{scans.push(item);scanIndex=scans.length-1}replacingScan=false;await showScan() },
+    addScan: addScanFile,
     clearScans: () => { scans = []; recoveredScan = null; void retainScan().catch(app.fail) },
     createScan: async () => { saveScanSettings(); await retainScan(); return (await import("./scan-runtime.mjs")).imagesToPdf(scans) } }
 }

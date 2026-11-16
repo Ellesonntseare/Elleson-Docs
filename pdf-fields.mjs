@@ -1,4 +1,4 @@
-import { PDFTextField, PDFCheckBox, PDFDropdown, PDFRadioGroup, PDFOptionList } from 'pdf-lib'
+import { PDFTextField, PDFCheckBox, PDFDropdown, PDFRadioGroup, PDFOptionList, PDFName, PDFArray } from 'pdf-lib'
 
 export function fieldValue(field) {
   if (field instanceof PDFTextField) return field.getText() || ''
@@ -22,4 +22,15 @@ export function setFieldValue(field, value) {
     if (value === '' || Array.isArray(value) && !value.length) field.clear()
     else field.select(value)
   } else throw new Error('This PDF field does not support that value.')
+}
+
+export function flattenPdfForm(pdf){
+  pdf.getForm().flatten()
+  // pdf-lib can leave widget references in /Annots after removing their objects.
+  // Remove only unresolved references; ordinary comments and links remain intact.
+  for(const page of pdf.getPages()){
+    const annotations=page.node.lookupMaybe(PDFName.of('Annots'),PDFArray)
+    if(!annotations)continue
+    for(let i=annotations.size()-1;i>=0;i--)if(!pdf.context.lookup(annotations.get(i)))annotations.remove(i)
+  }
 }

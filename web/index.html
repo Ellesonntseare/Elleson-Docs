@@ -10,6 +10,7 @@
   <script type="module" src="/viewer.mjs"></script>
   <script src="/vendor/jszip/jszip.min.js"></script>
   <script src="/vendor/docx/docx-preview.min.js"></script>
+  <link rel="stylesheet" href="/document-suite.css">
 </head>
 <body>
   <header class="app-header">
@@ -39,7 +40,7 @@
       <button id="print" disabled>Print</button>
     </div>
     <input id="file" type="file" accept=".pdf,.doc,.docx,image/png,image/jpeg,image/webp,image/gif,image/bmp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
-    <input id="scan-file" type="file" accept="image/*" capture="environment" hidden>
+    <input id="scan-file" type="file" multiple accept="image/*" capture="environment" hidden>
     <nav id="document-tabs" aria-label="Open documents" hidden></nav>
     <select id="mobile-tabs" aria-label="Switch document" hidden></select>
   </header>

@@ -1,3 +1,15 @@
+# Elleson Docs 0.4.11
+
+- Multi-page scanner: capture or add photos from the gallery, review thumbnails, retake pages, drag to reorder and save one PDF. Scan drafts recover after closing the app.
+- Automatic page detection separates a connected sheet from bright background objects. Perspective correction straightens the selected four corners. Review the crop before saving, particularly on low-contrast backgrounds.
+- Pages workspace: preview thumbnails, drag or move pages, rotate, duplicate and remove pages. Apply the complete arrangement as one undoable change. App-added PDF ink stays editable after page changes. Duplicated form pages contain printed form entries; the original form page remains interactive.
+- Combine documents: preview a PDF assembled from PDFs, supported pictures and Word files. Word layout conversion requires the Windows app, including from a connected phone. Form entries become printed content in the combined PDF; input files are preserved.
+- Drawing tools: rectangular selection of multiple drawings, moving, resizing, duplication, deletion and recolouring in PDF and Word. PDF ink also supports changing stroke width. Saved Word ink is an image, so resize it to change its apparent thickness. Undo restores batch changes.
+- Shapes: drag to draw straight lines, arrows, rectangles and ellipses in PDF and Word. Highlighter works in both formats. Drawing edits apply to marks made in Elleson Docs.
+- Recovery history: preview PDF and DOCX checkpoints before restoring, create a checkpoint manually, and retain the current work before a restore. Changed documents get an additional checkpoint every minute while the primary editor is open. Crash recovery continues to save edits separately.
+- Phone companion: a document-focused view with pen, signature and scanner shortcuts, undo and drawing settings. Connect over Wi-Fi to work on the PC's shared document.
+- Verification: full regression 66/66 passed. After the final recovery and offline Word fixes, all 8 focused workspace checks passed. Native Windows open/edit/save/reopen, file-conflict protection, cursor zoom, scrolling and picture export passed. Phone-size Pages and Drawing tools were visually checked. Android signature, alignment and packaged assets were verified. Physical Android device testing remains outstanding.
+
 # Elleson Docs 0.4.10
 
 - Open PNG, JPEG, WebP, GIF and BMP from the standard file picker or the operating system. Pictures open as one-page working PDFs. File > Save as PDF writes a separate PDF and preserves the source picture.

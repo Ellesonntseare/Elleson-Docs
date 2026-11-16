@@ -1,3 +1,4 @@
+import {pageCorners} from "./scan-detection.mjs"
 import { PDFDocument, StandardFonts } from "pdf-lib"
 import { applyScanFilter } from "./scan-filters.mjs"
 export const defaultCorners = () => [[0, 0], [1, 0], [1, 1], [0, 1]]
@@ -10,13 +11,7 @@ export async function detectCorners(file) {
     const scale = Math.min(1, 500 / Math.max(image.width, image.height)), canvas = document.createElement("canvas")
     canvas.width = Math.round(image.width * scale); canvas.height = Math.round(image.height * scale)
     const context = canvas.getContext("2d"); context.drawImage(image, 0, 0, canvas.width, canvas.height)
-    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data, extrema = [[Infinity, null], [-Infinity, null], [-Infinity, null], [Infinity, null]]
-    for (let y = 1; y < canvas.height - 1; y++) for (let x = 1; x < canvas.width - 1; x++) {
-      const offset = (y * canvas.width + x) * 4
-      if ((pixels[offset] + pixels[offset + 1] + pixels[offset + 2]) / 3 < 190) continue
-      ;[x + y, x - y, x + y, x - y].forEach((score, index) => { if ((index === 0 || index === 3) ? score < extrema[index][0] : score > extrema[index][0]) extrema[index] = [score, [x / canvas.width, y / canvas.height]] })
-    }
-    const corners = extrema.map(item => item[1]); return valid(corners) ? corners : defaultCorners()
+    return pageCorners(context.getImageData(0,0,canvas.width,canvas.height).data,canvas.width,canvas.height)
   } finally { image.close() }
 }
 function homography(points) {
