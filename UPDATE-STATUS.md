@@ -1,3 +1,12 @@
+# Elleson Docs 0.4.14
+
+- Phone companion now offers Sign on page: write directly on a PDF or Word page, use two fingers to move and zoom, and resume writing without opening a separate signature pad.
+- Authenticated live ink and view updates reach the other device without waiting for document polling. Preview requests coalesce under slow connections instead of replaying stale strokes. Polling remains the reconnect fallback.
+- A live pen tip displays the newest sample immediately while completed curve segments remain on the canvas. Pen dots are retained. Phone and PC use document coordinates for placement and stroke width.
+- Pending PDF strokes remain visible through save acknowledgement. Word previews remain visible until their saved image is rendered. Live strokes do not fade again when saved.
+- Saved PDFs retain smooth curves and round ends rather than separate straight segments. Saved Word drawings use up to 4x raster resolution, capped at 4096 pixels per dimension.
+- Verification: 22 focused regression checks passed, followed by 3 final live-ink/Word checks including a mid-stroke pause longer than preview expiry. Tests pause normal PC polling, observe ink before pen-up, check pinch cancellation and compare normalized ink bounds across phone and PC. Native Windows open/edit/save/reopen, file-conflict protection and picture-to-PDF checks passed. Physical phone Wi-Fi latency and drawing feel still require hands-on confirmation.
+
 # Elleson Docs 0.4.13
 
 - Connected Word text is positioned in one pass instead of exposing a partially rearranged paragraph every frame. Glyph measurements and corrections are batched to reduce repeated layout work.

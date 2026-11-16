@@ -1,3 +1,4 @@
+import {drawPdfInk} from './ink-export.mjs'
 import { fieldValues, sameValue, validFieldValue, setFieldValue, flattenPdfForm } from './pdf-fields.mjs'
 import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib"
 import { protectPdf } from "./pdf-protection.mjs"
@@ -140,10 +141,9 @@ export async function install() {
       if (mark.kind === "text") page.drawText(mark.value, {
         x: mark.at[0], y: mark.at[1], size: mark.size, rotate: degrees(mark.angle), font, color
       })
-      else for (let index = 1; index < mark.points.length; index++) {
+      else {
         const inkColor = mark.color ? rgb(...[1, 3, 5].map(offset => parseInt(mark.color.slice(offset, offset + 2), 16) / 255)) : color
-        page.drawLine({ start: { x: mark.points[index - 1][0], y: mark.points[index - 1][1] },
-          end: { x: mark.points[index][0], y: mark.points[index][1] }, thickness: mark.width || 1.7, color: inkColor, opacity: mark.opacity ?? 1 })
+        drawPdfInk(page,mark,inkColor)
       }
     }
     if (flatten) flattenPdfForm(document)

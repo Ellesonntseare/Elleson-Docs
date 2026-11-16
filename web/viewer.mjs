@@ -18,7 +18,8 @@ import { installWordPageSizing, renderWordPages, positionAnchoredInk } from './w
 import { installWordInk } from './word-ink.mjs'
 import { installUpdater } from './updater.mjs'
 import { installSignatureGestures } from './signature-gestures.mjs'
-import {strokePath,pointerSamples,incrementalStroke} from './smooth-ink.mjs'
+import {createInkStream,installLiveInk} from './live-ink.mjs'
+import {strokePath,pointerSamples,incrementalStroke,createStrokeTip} from './smooth-ink.mjs'
 import * as pdfjs from "/pdfjs/legacy/build/pdf.mjs"
 import "./offline.mjs"
 import { installTools } from "./workspace-tools.mjs"
@@ -81,8 +82,9 @@ let findPosition = -1
 let searchSource
 let thumbnailObserver
 let lastRemoteInk
+let remotePreviewSequence=-1
 let remoteDraft
-let previewAt = 0, inkFrame, signatureFrame, inkJournalAt=0
+let inkFrame, signatureFrame, inkJournalAt=0
 const localInkIds=new Set(),inkArrivals=new Map()
 let fadeFrame
 const remoteLineChanges=new Set()
@@ -301,7 +303,7 @@ $["mobile-tabs"].addEventListener("change", () => {
 
 function setMode(value) {
   mode = value
-  draft = null
+  draft = null;inkTip.clear()
   $["pdf-sheet"].dataset.mode = mode
   $["drawing-done"].hidden = !["pen", "highlight"].includes(mode)
   for (const button of document.querySelectorAll("[data-mode]")) button.setAttribute("aria-pressed", button.dataset.mode === mode)
@@ -331,9 +333,7 @@ function refresh() {
       if (state.tabs) openTabs = state.tabs
       role = state.role
       sharedView.receive(state.view)
-      remoteDraft = state.preview
-      wordInk.preview(remoteDraft)
-      if (current?.extension === "pdf" && JSON.stringify(remoteDraft)!==lastRemoteInk){lastRemoteInk=JSON.stringify(remoteDraft);drawMarks()}
+      receivePreview(state)
       if (queuedChanges.length && !flushing) void flushQueue()
       if (state.handoff) void tools.receiveHandoff(state.handoff).catch(fail)
       if (state.pairRequest && requestedPhone !== state.pairRequest.id) {
@@ -715,17 +715,19 @@ function drawMarks() {
   context.lineCap = "round"
   context.lineJoin = "round"
   context.lineWidth = 1.7 * viewport.scale
+  for(const mark of current.marks)pendingInk.delete(mark.id)
   const marks = current.marks.filter(mark => mark.page === viewport.page)
   $.undo.disabled = marks.length === 0
   const pendingMarks = [...marks]
-  if (remoteDraft?.page === viewport.page) pendingMarks.push(remoteDraft)
+  for(const item of pendingInk.values())if(item.document===current.id&&item.mark.page===viewport.page&&!marks.some(mark=>mark.id===item.mark.id))pendingMarks.push(item.mark)
+  if (remoteDraft?.document === current.id && remoteDraft?.page === viewport.page && !pendingMarks.some(mark=>mark.id===remoteDraft.id)) pendingMarks.push(remoteDraft)
   if (draft?.page === viewport.page) pendingMarks.push(draft)
   for (const mark of pendingMarks) {
     context.strokeStyle = mark.color || "#093352"
     context.lineWidth = (mark.width || 1.7) * viewport.scale
     context.globalAlpha = mark.opacity ?? 1
     const markId=mark.group||mark.id
-    if(markId&&!localInkIds.has(markId)&&mark!==draft){if(!inkArrivals.has(markId))inkArrivals.set(markId,performance.now());const elapsed=performance.now()-inkArrivals.get(markId);if(elapsed<160&&!matchMedia('(prefers-reduced-motion: reduce)').matches){context.globalAlpha*=.2+.8*elapsed/160;if(!fadeFrame)fadeFrame=requestAnimationFrame(()=>{fadeFrame=undefined;drawMarks()})}}
+    if(markId&&!localInkIds.has(markId)&&mark!==draft&&mark!==remoteDraft){if(!inkArrivals.has(markId))inkArrivals.set(markId,performance.now());const elapsed=performance.now()-inkArrivals.get(markId);if(elapsed<160&&!matchMedia('(prefers-reduced-motion: reduce)').matches){context.globalAlpha*=.2+.8*elapsed/160;if(!fadeFrame)fadeFrame=requestAnimationFrame(()=>{fadeFrame=undefined;drawMarks()})}}
     if (mark.kind === "text") {
       context.font = mark.size * viewport.scale + "px Arial, sans-serif"
       const at = viewport.convertToViewportPoint(...mark.at), angle = (mark.angle || 0) * Math.PI / 180
@@ -1385,6 +1387,9 @@ $.recognize.addEventListener("click", async () => {
 })
 
 const inkCanvas = $["ink-canvas"]
+const inkTip=createStrokeTip(inkCanvas),streamInk=createInkStream(request),pendingInk=new Map()
+setInterval(()=>{if(draft&&current)streamInk(current.id,draft)},800)
+function paintTip(){if(draft&&viewport)inkTip.paint(draft.points,draft.width*viewport.scale*viewport.pixelRatio,draft.color,draft.opacity??1,p=>viewport.convertToViewportPoint(...p).map(v=>v*viewport.pixelRatio))}
 $["drawing-done"].addEventListener("click", async () => {
   const button = $["drawing-done"]
   button.disabled = true
@@ -1398,13 +1403,13 @@ $["drawing-done"].addEventListener("click", async () => {
 })
 installDocumentGestures({ stage: $.stage, sheet: $["pdf-sheet"], isActive:()=>current?.extension==='pdf'&&!readingView.active, canPan:()=>drawingSettings.stylusOnly||!['pen','highlight','signature','erase','select','review','text'].includes(mode), getZoom: () => zoom,
   setZoom: value => { zoom = value }, render: renderPage,
-  cancelStroke: () => { if (draft) inputDrafts.acknowledge(current.id, draft); draft = null; drawMarks(); if (current) void postJson("/api/preview/" + current.id, {}).catch(() => {}) } })
+  cancelStroke: () => { if (draft) inputDrafts.acknowledge(current.id, draft); draft = null; inkTip.clear(); drawMarks(); if (current) streamInk(current.id,{}) } })
 function canvasPoint(event) {
   const rect = inkBounds || inkCanvas.getBoundingClientRect()
   return [(event.clientX - rect.left)*viewport.width/rect.width, (event.clientY - rect.top)*viewport.height/rect.height]
 }
 inkCanvas.addEventListener("pointerdown", event => {
-  if (!viewport || viewport.page !== page || event.button !== 0 || draft) return
+  if (!viewport || viewport.page !== page || event.button !== 0 || draft || $.stage.dataset.navigating==='true') return
   if(event.pointerType==='touch'&&(drawingSettings.stylusOnly||event.width>48||event.height>48))return
   const actionMode=drawingSettings.eraser?'erase':mode
   inkBounds=inkCanvas.getBoundingClientRect()
@@ -1454,6 +1459,7 @@ inkCanvas.addEventListener("pointerdown", event => {
       color: actionMode === "highlight" ? "#f7ca42" : $["ink-color"].value,
       width: actionMode === "highlight" ? 12 : Number($["ink-width"].value), opacity: actionMode === "highlight" ? .25 : 1 }
     inputDrafts.save(current.id, draft)
+    paintTip();streamInk(current.id,draft)
   }
 })
 inkCanvas.addEventListener("pointermove", event => {
@@ -1462,23 +1468,20 @@ inkCanvas.addEventListener("pointermove", event => {
   if(Date.now()-inkJournalAt>150){inkJournalAt=Date.now();inputDrafts.save(current.id,draft)}
   localInkIds.add(draft.id)
   if(!inkFrame)inkFrame=requestAnimationFrame(()=>{inkFrame=null;if(!draft)return;const ctx=inkCanvas.getContext('2d');ctx.setTransform(viewport.pixelRatio,0,0,viewport.pixelRatio,0,0);ctx.lineCap=ctx.lineJoin='round';ctx.strokeStyle=draft.color;ctx.lineWidth=draft.width*viewport.scale;ctx.globalAlpha=draft.opacity??1;draft.painted=incrementalStroke(ctx,draft.points,draft.painted||1,false,p=>viewport.convertToViewportPoint(...p));ctx.globalAlpha=1})
-  if (Date.now() - previewAt >= 90) {
-    previewAt = Date.now()
-    void postJson("/api/preview/" + current.id, draft).catch(() => {})
-  }
+  paintTip();streamInk(current.id,draft)
 })
 inkCanvas.addEventListener("pointerup", event => {
   if (!draft || event.pointerId !== draft.pointer) return
+  appendPoint(draft.points,viewport.convertToPdfPoint(...canvasPoint(event)))
   const mark = draft
-  draft = null
-  if (mark.points.length > 1) void edit(mark)
-  else inputDrafts.acknowledge(current.id, mark)
+  draft = null;inkTip.clear();pendingInk.set(mark.id,{document:current.id,mark});drawMarks();streamInk(current.id,mark)
+  void edit(mark).then(saved=>{if(saved&&!queuedChanges.some(item=>item.change.id===mark.id))pendingInk.delete(mark.id)})
 })
 inkCanvas.addEventListener("pointercancel", () => {
   if (draft) inputDrafts.acknowledge(current.id, draft)
   draft = null
-  drawMarks()
-  if (current) void postJson("/api/preview/" + current.id, {}).catch(() => {})
+  inkTip.clear();drawMarks()
+  if (current) streamInk(current.id,{})
 })
 $["cancel-text"].addEventListener("click", () => $["text-dialog"].close())
 $["add-text"].addEventListener("submit", event => {
@@ -1626,6 +1629,19 @@ const sharedView = installSharedView({isDrawing:()=>Boolean(draft)||wordInk.draw
   getPage:()=>page, getZoom:()=>readingView.active?readingView.getZoom():current?.extension==='pdf'?zoom:wordPageSizing.getZoom(),
   async setView(value){if(current?.extension==='pdf'){if(value.reading)return readingView.setView(value);if(readingView.active)await readingView.close();if(!pdf)return false;if(page!==value.page||Math.abs(zoom-value.zoom)>1e-6){page=Math.min(pdf.numPages,value.page);zoom=value.zoom;await renderPage()}}else{if(!$['word-sheet'].querySelector('section.docx'))return false;if(Math.abs(wordPageSizing.getZoom()-value.zoom)>1e-6)wordPageSizing.setZoom(value.zoom)}return true}
 })
+function receivePreview(state){
+  if(state.previewSequence!==undefined&&state.previewSequence<remotePreviewSequence)return
+  remotePreviewSequence=state.previewSequence??remotePreviewSequence
+  remoteDraft=state.preview
+  if(remoteDraft?.kind==='ink')inkArrivals.set(remoteDraft.id,performance.now()-160)
+  wordInk.preview(remoteDraft,state.inkCommits)
+  if(current?.extension==='pdf'&&JSON.stringify(remoteDraft)!==lastRemoteInk){lastRemoteInk=JSON.stringify(remoteDraft);drawMarks()}
+}
+installLiveInk({request,enabled:()=>Boolean(credential)&&location.hostname!=='appassets.androidplatform.net',receive:state=>{
+  if(state.type==='preview')receivePreview(state)
+  else if(state.type==='view')sharedView.receive(state.view)
+  else if(state.type==='refresh')void refresh().then(()=>refresh())
+}})
 installUpdater()
 installCompareView({pdfjs,app:{get:()=>({current}),request,pending:()=>pendingEdit,status}})
 layout()

@@ -25,6 +25,7 @@ const downloadMime = {
 
 async function start(port = 0, recoveryDirectory) {
   const { fieldValues, sameValue, validFieldValue, setFieldValue } = await import('./pdf-fields.mjs')
+  const {drawPdfInk}=await import('./ink-export.mjs')
   const web = express()
   const owner = token()
   const library = new DocumentLibrary(recoveryDirectory ? path.join(recoveryDirectory, "library") : null)
@@ -44,6 +45,19 @@ async function start(port = 0, recoveryDirectory) {
   let editQueue = Promise.resolve()
   const wordLayouts = new Map()
   const previews = Object.create(null)
+  const inkCommits=new Map()
+  let previewSequence=0
+  const liveClients=new Set()
+  const peerPreview=role=>{const value=previews[role==='pc'?'phone':'pc'];return value?.until>Date.now()?value.mark:null}
+  const publish=(type,role)=>{
+    for(const client of liveClients){
+      if(client.role==='phone'&&(client.token!==mobile||mobileUntil<=Date.now())){client.response.end();continue}
+      if(role&&role===client.role)continue
+      const payload=type==='preview'?{type,preview:peerPreview(client.role),previewSequence}:type==='view'?{type,view:sharedView}:{type}
+      if(client.response.writableLength>256*1024){client.response.destroy();continue}
+      client.response.write('data: '+JSON.stringify(payload)+'\n\n')
+    }
+  }
   const pendingExports = new Map()
   let sharedView = null, viewSequence = 0
   let wordRenderer
@@ -216,6 +230,19 @@ async function start(port = 0, recoveryDirectory) {
     if (recoveryDirectory) await fs.unlink(path.join(recoveryDirectory, "paired-device.json")).catch(error => { if (error.code !== "ENOENT") throw error })
     response.sendStatus(204)
   })
+  web.get('/api/live',(request,response)=>{
+    response.set({'Content-Type':'text/event-stream','Cache-Control':'no-store','X-Accel-Buffering':'no'})
+    request.socket.setNoDelay(true)
+    response.flushHeaders()
+    const client={role:request.role,token:request.get('authorization')?.slice(7),response}
+    liveClients.add(client)
+    response.write('data: '+JSON.stringify({type:'preview',preview:peerPreview(client.role),previewSequence})+'\n\n')
+    const heartbeat=setInterval(()=>{
+      if(client.role==='phone'&&(client.token!==mobile||mobileUntil<=Date.now()))return response.end()
+      response.write(': keepalive\n\n')
+    },15000)
+    response.on('close',()=>{clearInterval(heartbeat);liveClients.delete(client)})
+  })
   web.get("/api/state", (request, response) => {
     const unchanged = Number(request.query.revision) === revision
     response.json({
@@ -223,8 +250,7 @@ async function start(port = 0, recoveryDirectory) {
       revision, role: request.role, paired: Boolean(mobile) && mobileUntil > Date.now(), phoneOnline: Date.now() - lastPhoneSeen < 6000, recoveryWarning, handoff: handoff?.target === request.role ? handoff : null,
       pairRequest: request.role === "pc" && pairRequest && !pairRequest.approved && pairRequest.until > Date.now() ? { id: pairRequest.id, address: pairRequest.address } : null,
       tabs: [...documents.values()].map(item => ({ id: item.libraryId, documentId: item.id, filename: item.filename, dirty: item.changeNumber !== item.savedNumber })),
-      preview: previews[request.role === "pc" ? "phone" : "pc"]?.until > Date.now()
-        ? previews[request.role === "pc" ? "phone" : "pc"].mark : null,
+      previewSequence, preview: peerPreview(request.role), inkCommits:Object.fromEntries(inkCommits),
       ...(unchanged ? {} : { document: document ? snapshot(document) : null })
     })
   })
@@ -233,6 +259,7 @@ async function start(port = 0, recoveryDirectory) {
     const {client, page, x, y, zoom} = request.body || {}
     if (typeof client !== 'string' || !/^[a-zA-Z0-9-]{12,80}$/.test(client) || !Number.isInteger(page) || page<1 || page>100000 || ![x,y].every(v=>Number.isFinite(v)&&v>=0&&v<=1) || !Number.isFinite(zoom) || zoom<=0) return response.sendStatus(400)
     sharedView = {document:document.id,client,page,x,y,zoom,reading:request.body.reading===true, color:/^#[a-f0-9]{6}$/i.test(request.body.color||'')?request.body.color:undefined, thickness:[1,2,4,8].includes(request.body.thickness)?request.body.thickness:undefined,sequence:++viewSequence}
+    publish('view',request.role)
     response.sendStatus(204)
   })
   web.get('/api/word-layout/:id',(request,response)=>{const value=wordLayouts.get(request.params.id);response.json(value?.version===Number(request.query.version)?value:null)})
@@ -256,11 +283,14 @@ async function start(port = 0, recoveryDirectory) {
     if (!points && request.body?.kind!=='word-ink') {
       delete previews[request.role]
     } else if (request.body.kind==='word-ink' && document.word && request.body.version===document.contentVersion && /^[a-zA-Z0-9-]{12,80}$/.test(id||'') && Number.isInteger(request.body.index) && document.word.lines[request.body.index] && Number.isInteger(page) && page>=0 && page<1000 && [request.body.width,request.body.height].every(v=>Number.isFinite(v)&&v>0&&v<=5000) && Array.isArray(request.body.strokes) && request.body.strokes.length<=100 && request.body.strokes.reduce((n,s)=>n+(s.points?.length||0),0)<=12000 && request.body.strokes.every(s=>Array.isArray(s.points)&&s.points.length>0&&s.points.every(isPoint))) {
-      if(!document.applied.has(id))previews[request.role]={until:Date.now()+2200,mark:{...request.body,document:document.id}}
+      if(document.applied.has(id))return response.sendStatus(204)
+      previews[request.role]={until:Date.now()+2200,mark:{...request.body,document:document.id}}
     } else if (document.extension==='pdf' && /^[a-zA-Z0-9-]{12,80}$/.test(id || "") && Number.isInteger(page) && page >= 1 && page <= document.pages && Array.isArray(points)
       && points.length >= 1 && points.length <= 1200 && points.every(isPoint)) {
-      if (!document.applied.has(id)) previews[request.role] = { until: Date.now() + 2200, mark: { id, kind: "ink", page, points, ...inkStyle(request.body) } }
+      if(document.applied.has(id))return response.sendStatus(204)
+      previews[request.role] = { until: Date.now() + 2200, mark: { id, document:document.id, kind: "ink", page, points, ...inkStyle(request.body) } }
     } else return response.sendStatus(400)
+    previewSequence++;publish('preview',request.role)
     response.sendStatus(204)
   })
   web.get("/api/source/:id", async (request, response) => {
@@ -486,12 +516,15 @@ async function start(port = 0, recoveryDirectory) {
       const image = { ...engine.imageInfo(request.body), bytes: request.body, index, position }
       const bytes = await saveWord(current.word, current.wordEdits, current.wordFormats, undefined, image)
       await applyWordBytes(current, bytes, !position)
-      for(const role of Object.keys(previews))if(previews[role].mark?.id===operationId)delete previews[role]
+      for(const role of Object.keys(previews))if(previews[role].mark?.id===operationId){delete previews[role];previewSequence++}
       history.remember(current, before,position?'drawing stroke':'image insertion')
       current.changeNumber++
       current.applied.add(operationId)
       revision++
       await checkpoint()
+      inkCommits.set(operationId,current.contentVersion)
+      while(inkCommits.size>128)inkCommits.delete(inkCommits.keys().next().value)
+      publish('refresh')
       response.json(snapshot(current))
     })
     editQueue = operation.catch(() => {})
@@ -584,7 +617,7 @@ async function start(port = 0, recoveryDirectory) {
           id: edit.id + "-" + index, group: edit.id, kind: "ink", page: edit.page, points, ...inkStyle(edit)
         })))
       } else if (edit.kind === "ink" && Array.isArray(edit.points) && edit.points.length > 0 && edit.points.length <= 1200 && edit.points.every(isPoint)) {
-        delete previews[request.role]
+        if(previews[request.role]?.mark?.id===edit.id){delete previews[request.role];previewSequence++}
         current.marks.push({ id: edit.id, page: edit.page, kind: "ink", points: edit.points, ...inkStyle(edit) })
       } else if (edit.kind === "text" && typeof edit.value === "string" && edit.value.trim() && edit.value.length <= 400 && isPoint(edit.at) && Number.isFinite(edit.angle) && Math.abs(edit.angle) <= 360 && [10, 12, 14, 18, 24].includes(edit.size)) {
         (await latinFont).encodeText(edit.value)
@@ -600,6 +633,7 @@ async function start(port = 0, recoveryDirectory) {
     current.changeNumber++
     revision++
     await checkpoint()
+    publish('refresh')
     response.json(snapshot(current))
   }
   web.get("/api/save/:id", async (request, response) => {
@@ -814,11 +848,7 @@ async function start(port = 0, recoveryDirectory) {
         if (mark.kind === "text") {
           page.drawText(mark.value, { x: mark.at[0], y: mark.at[1], size: mark.size, rotate: degrees(mark.angle), font, color })
         } else {
-          for (let index = 1; index < mark.points.length; index++) {
-            const [x, y] = mark.points[index - 1]
-            const [endX, endY] = mark.points[index]
-            page.drawLine({ start: { x, y }, end: { x: endX, y: endY }, thickness: mark.width || 1.7, color: inkColor, opacity: mark.opacity ?? 1 })
-          }
+          drawPdfInk(page,mark,inkColor)
         }
       }
       if (options.flatten) (await import('./pdf-fields.mjs')).flattenPdfForm(pdf)
