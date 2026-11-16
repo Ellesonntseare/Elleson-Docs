@@ -1,3 +1,5 @@
+import {installPictures} from './pictures.mjs'
+import {installQuickPen} from './quick-pen.mjs'
 import {installPartialEraser} from './partial-eraser.mjs'
 import {restyleMoreMenu} from './more-menu.mjs'
 import {installConflictHistory} from './conflict-history.mjs'
@@ -1578,18 +1580,22 @@ $["saved-signatures"].addEventListener("change", () => {
   signatureStrokes = structuredClone(savedSignatures[$["saved-signatures"].value]?.strokes || [])
   drawSignature()
 })
-$["signature-insert"].addEventListener("click", () => {
+const signatureName=document.createElement('input');signatureName.id='signature-name';signatureName.placeholder='Signature or initials name';signatureName.setAttribute('aria-label','Signature name');$['saved-signatures'].after(signatureName)
+const removeSignature=document.createElement('button');removeSignature.type='button';removeSignature.textContent='Remove saved signature';signatureName.after(removeSignature);removeSignature.onclick=()=>{const index=Number($['saved-signatures'].value);if($['saved-signatures'].value===''||!savedSignatures[index])return;savedSignatures.splice(index,1);localStorage.setItem('elleson-signatures',JSON.stringify(savedSignatures));$['saved-signatures'].replaceChildren(new Option('New signature',''),...savedSignatures.map((item,index)=>new Option(item.name,index)))}
+$["signature-insert"].addEventListener("click", async () => {
   if (!signatureStrokes.length) return
   let remembered = true
   if ($["signature-remember"].checked) {
-    const next = [...savedSignatures, { name: new Date().toLocaleString(), strokes: structuredClone(signatureStrokes) }]
+    const next = [...savedSignatures, { name: signatureName.value.trim().slice(0,80)||new Date().toLocaleString(), strokes: structuredClone(signatureStrokes) }]
     try {
       localStorage.setItem("elleson-signatures", JSON.stringify(next))
       savedSignatures = next
     } catch { remembered = false }
   }
   $["signature-dialog"].close()
-  setMode("signature")
+  if(current?.lines){
+    try{await suiteApp.pending();const doc=current,page=[...$['word-sheet'].querySelectorAll('section.docx')].find(p=>p.getBoundingClientRect().bottom>$.stage.getBoundingClientRect().top+40),paragraph=page?.querySelector('[data-word-source-index]');if(!paragraph)throw Error('Choose a page containing text.');const width=Math.min(240,page.offsetWidth-64),height=100,ink={width,height,strokes:signatureStrokes.map(points=>({color:$['ink-color'].value,width:Number($['ink-width'].value),points:points.map(([x,y])=>[x*width,y*height])}))},png=(await import('./ink-vectors.mjs')).inkPng(ink);await request('/api/word-image/'+doc.id,{method:'POST',headers:{'Content-Type':'application/json','X-Operation-Id':editId(),'X-Document-Version':String(doc.contentVersion),'X-Paragraph-Index':paragraph.dataset.wordSourceIndex},body:JSON.stringify({png,position:{x:32,y:32,width,height,ink}})});revision=-1;await refresh();status('Signature inserted. Tap it to move or resize.')}catch(error){fail(error)}
+  }else setMode("signature")
   if (!remembered) status("Tap to place the signature. Device storage could not retain it for reuse.")
 })
 $["replace-text"].addEventListener("submit", async event => {
@@ -1707,3 +1713,7 @@ installTapTools(suiteApp)
 installWorkState({get:()=>current,mode:()=>mode})
 const conflictHistory=installConflictHistory({get:()=>current,apply:edit,fail})
 restyleMoreMenu()
+
+installQuickPen()
+
+installPictures(suiteApp)

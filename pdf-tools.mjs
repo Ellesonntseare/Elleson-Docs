@@ -1,5 +1,5 @@
 import * as mupdf from "mupdf"
-import { PDFDocument, PDFName, PDFArray, PDFDict } from "pdf-lib"
+import { PDFDocument, PDFName, PDFArray, PDFDict, PDFString } from "pdf-lib"
 const toBytes = value => typeof Buffer !== "undefined" ? Buffer.from(value) : Uint8Array.from(value)
 const transform = ([x, y], m) => [x * m[0] + y * m[2] + m[4], x * m[1] + y * m[3] + m[5]]
 const save = document => { const buffer = document.saveToBuffer("garbage=1,compress"); const bytes = toBytes(buffer.asUint8Array()); buffer.destroy(); return bytes }
@@ -47,10 +47,17 @@ export function images(bytes, index) {
       const a = transform([rect[0], rect[1]], inverse), b = transform([rect[2], rect[3]], inverse)
       result.push({ id: result.length, rect: [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[0], b[0]), Math.max(a[1], b[1])] })
     } })
+    for(const annotation of page.getAnnotations()){
+      const object=annotation.getObject(),key=object.get('EllesonPicture').asString()
+      if(!key)continue
+      const rect=annotation.getRect(),a=transform(rect.slice(0,2),inverse),b=transform(rect.slice(2),inverse)
+      result.push({id:key,managed:true,rect:[Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.max(a[0],b[0]),Math.max(a[1],b[1])]})
+    }
     return result
   } finally { text.destroy(); page.destroy(); document.destroy() }
 }
 export async function image(bytes, imageBytes, edit) {
+  if(edit.managed)return managedPicture(bytes,imageBytes,edit)
   let source = bytes
   if (edit.replace !== undefined && edit.replace !== null) {
     const selected = images(bytes, edit.page - 1)[edit.replace]
@@ -97,4 +104,23 @@ export async function combineEditable(bytes, extra) {
     }
   }
   return { bytes: toBytes(await destination.save({ updateFieldAppearances: false })), pages: destination.getPageCount() }
+}
+
+async function managedPicture(bytes,imageBytes,edit){
+ const pdf=await PDFDocument.load(bytes),page=pdf.getPage(edit.page-1),context=pdf.context
+ const annots=page.node.lookupMaybe(PDFName.of('Annots'),PDFArray)||context.obj([])
+ let previous,previousIndex=-1
+ for(let i=0;i<annots.size();i++){const item=context.lookup(annots.get(i));if(item instanceof PDFDict&&item.lookupMaybe(PDFName.of('EllesonPicture'),PDFString)?.decodeText()===edit.target){previous=item;previousIndex=i;break}}
+ if(edit.target&&!previous)throw Error('Select the picture again.')
+ if(edit.action==='delete'){if(previousIndex<0)throw Error('Select the picture first.');annots.remove(previousIndex);page.node.set(PDFName.of('Annots'),annots);return toBytes(await pdf.save())}
+ const data=imageBytes.length?toBytes(imageBytes):toBytes(Uint8Array.from(atob(previous.lookup(PDFName.of('EllesonData'),PDFString).asString()),c=>c.charCodeAt(0)))
+ if(data.length>6*1024*1024)throw Error('Choose a picture below 6 MB.')
+ const bitmap=data[0]===137?await pdf.embedPng(data):await pdf.embedJpg(data),r=edit.rect
+ if(!Array.isArray(r)||r.length!==4||!r.every(Number.isFinite)||r[0]<0||r[1]<0||r[2]<=r[0]||r[3]<=r[1]||r[2]>page.getWidth()||r[3]>page.getHeight())throw Error('Keep the picture inside the page.')
+ const appearance=context.register(context.flateStream('q 1 0 0 1 0 0 cm /Picture Do Q',{Type:'XObject',Subtype:'Form',BBox:[0,0,1,1],Resources:{XObject:{Picture:bitmap.ref}}}))
+ const key=edit.target||edit.id,encoded=typeof Buffer!=='undefined'?Buffer.from(data).toString('base64'):btoa(Array.from(data,c=>String.fromCharCode(c)).join(''))
+ const annotation=context.obj({Type:'Annot',Subtype:'Stamp',Rect:r,F:4,AP:{N:appearance},NM:PDFString.of(key),EllesonPicture:PDFString.of(key),EllesonData:PDFString.of(encoded)})
+ if(previousIndex>=0)annots.remove(previousIndex)
+ annots.push(context.register(annotation));page.node.set(PDFName.of('Annots'),annots)
+ return toBytes(await pdf.save())
 }

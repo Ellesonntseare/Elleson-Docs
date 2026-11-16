@@ -1,3 +1,11 @@
+# Elleson Docs 0.4.21
+
+- Windows startup shows a workspace loading window; launching again shows and restores the existing window. Startup errors no longer silently leave a destroyed-window instance running. Hidden-window reopening passed an Electron integration check.
+- Add picture supports Word and PDF. Tap newly inserted pictures for position, dimensions, proportional resizing, drag Move/Resize, replacement and deletion. PDF pictures are independent annotations, so moving them preserves surrounding text. Word pictures use floating anchors. Undo is supported.
+- Added compact pen controls, freehand lasso selection, signature naming/removal and reusable signature insertion in Word.
+- Selected-page filters accept ranges such as 1, 3-5. Automatic scan edge detection and draggable crop corners remain available; scan warnings now cover lighting, low detail, bright areas and possible cut-off edges.
+- Physical-device gestures, arbitrary pre-existing pictures, and all DOCX layout variants require further real-document validation.
+
 # Elleson Docs 0.4.20
 
 - Restore saved Word page breaks and visible page sections. Transfer geometry for all rendered paragraphs, including paragraphs without an editable source match, and avoid applying text indentation twice on the phone.

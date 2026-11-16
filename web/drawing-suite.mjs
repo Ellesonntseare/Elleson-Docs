@@ -1,3 +1,4 @@
+import {pointInPolygon} from './selection-geometry.mjs'
 import {inkPng} from './ink-vectors.mjs'
 export function drawingBounds(marks){
  let left=Infinity,top=Infinity,right=-Infinity,bottom=-Infinity
@@ -24,6 +25,7 @@ export function installDrawingSuite(app,hub){
  let action=null,gesture=null,selection=[],selectedDoc,selectedVersion,selectedPage,selectedWordPage,wordSelection=[],overlay
  function button(label,fn,parent){return hub.button(label,fn,parent)}
  async function begin(mode){if(!app.get())throw Error('Open a document first.');action=mode;selection=[];wordSelection=[];app.setMode(app.get().extension==='pdf'?'select':'read');if(app.get().lines)await app.renderWord();panel.close();app.status(mode==='select'?'Drag a rectangle around drawings. Tap Drawing tools to edit the selection.':'Drag on the document to draw a '+mode+'.');$('stage').classList.add('suite-drawing-active')}
+ button('Lasso drawings',()=>begin('lasso'),tools).id='suite-lasso-ink'
  button('Select drawings',()=>begin('select'),tools).id='suite-select-ink'
  for(const kind of ['line','arrow','rectangle','ellipse'])button(kind[0].toUpperCase()+kind.slice(1),()=>begin(kind),tools)
  button('Highlighter',()=>{if(app.get()?.extension==='pdf'){panel.close();action=null;$('stage').classList.remove('suite-drawing-active');app.setMode('highlight')}else begin('highlighter')},tools)
@@ -64,11 +66,11 @@ export function installDrawingSuite(app,hub){
    const word=app.get()?.extension!=='pdf',sheet=word?event.target.closest('#word-sheet section.docx'):$('pdf-sheet')
    if(!sheet||!sheet.contains(event.target))return
    event.preventDefault();event.stopImmediatePropagation();sheet.setPointerCapture(event.pointerId)
-   gesture={id:event.pointerId,start:coordinates(event,sheet,word),sheet,word,document:app.get().id,mode:action}
+   gesture={id:event.pointerId,start:coordinates(event,sheet,word),sheet,word,document:app.get().id,mode:action,path:[coordinates(event,sheet,word)]}
  },true)
  $('stage').addEventListener('pointermove',event=>{
    if(!gesture||gesture.id!==event.pointerId)return
-   event.preventDefault();event.stopImmediatePropagation();const g=gesture,end=coordinates(event,g.sheet,g.word),strokes=shapeStrokes(g.mode==='select'?'rectangle':g.mode,g.start,end)
+   event.preventDefault();event.stopImmediatePropagation();const g=gesture,end=coordinates(event,g.sheet,g.word),strokes=g.mode==='lasso'?[g.path.concat([end])]:shapeStrokes(g.mode==='select'?'rectangle':g.mode,g.start,end);if(g.mode==='lasso'&&g.path.length<3000)g.path.push(end)
    if(g.word)showOverlay(g.sheet,strokes,{width:g.sheet.offsetWidth,height:g.sheet.offsetHeight})
    else showOverlay(g.sheet,strokes.map(s=>s.map(p=>app.viewport().convertToViewportPoint(...p))),app.viewport())
  },true)
@@ -77,10 +79,10 @@ export function installDrawingSuite(app,hub){
    if(!gesture||gesture.id!==event.pointerId)return
    const g=gesture;gesture=null;event.preventDefault();event.stopImmediatePropagation();const end=coordinates(event,g.sheet,g.word)
    if(app.get()?.id!==g.document){overlay?.remove();return}
-   if(g.mode==='move'){void transform('apply',{dx:end[0]-g.start[0],dy:end[1]-g.start[1]}).then(saved=>{overlay?.remove();action='select';if(saved)app.status('Drawings moved. Undo restores their previous position.')}).catch(app.fail)}else if(g.mode==='select'){
-     const rect=drawingBounds([{points:[g.start,end]}]);selectedDoc=g.document;selectedVersion=app.get().contentVersion;selectedPage=app.page()
-     if(g.word){selectedWordPage=g.sheet;wordSelection=[...g.sheet.querySelectorAll('.word-saved-ink')].filter(image=>{const r={x:parseFloat(image.style.left),y:parseFloat(image.style.top),width:parseFloat(image.style.width),height:parseFloat(image.style.height)};return r.x+r.width>=rect[0]&&r.y+r.height>=rect[1]&&r.x<=rect[2]&&r.y<=rect[3]}).map(image=>({image,target:image.dataset.inkTarget,position:{x:parseFloat(image.style.left),y:parseFloat(image.style.top),width:parseFloat(image.style.width),height:parseFloat(image.style.height),...(image.dataset.inkParagraphY===undefined?{}:{paragraphY:Number(image.dataset.inkParagraphY)})}}))}
-     else{selection=app.get().marks.filter(m=>m.kind==='ink'&&m.page===selectedPage).filter(m=>{const r=drawingBounds([m]);return r[2]>=rect[0]&&r[3]>=rect[1]&&r[0]<=rect[2]&&r[1]<=rect[3]}).map(m=>m.id)}
+   if(g.mode==='move'){void transform('apply',{dx:end[0]-g.start[0],dy:end[1]-g.start[1]}).then(saved=>{overlay?.remove();action='select';if(saved)app.status('Drawings moved. Undo restores their previous position.')}).catch(app.fail)}else if(g.mode==='select'||g.mode==='lasso'){
+     const rect=drawingBounds([{points:g.mode==='lasso'?g.path:[g.start,end]}]);const inside=point=>g.mode!=='lasso'||pointInPolygon(point,g.path);selectedDoc=g.document;selectedVersion=app.get().contentVersion;selectedPage=app.page()
+     if(g.word){selectedWordPage=g.sheet;wordSelection=[...g.sheet.querySelectorAll('.word-saved-ink')].filter(image=>{const r={x:parseFloat(image.style.left),y:parseFloat(image.style.top),width:parseFloat(image.style.width),height:parseFloat(image.style.height)};return inside([r.x+r.width/2,r.y+r.height/2])&&r.x+r.width>=rect[0]&&r.y+r.height>=rect[1]&&r.x<=rect[2]&&r.y<=rect[3]}).map(image=>({image,target:image.dataset.inkTarget,position:{x:parseFloat(image.style.left),y:parseFloat(image.style.top),width:parseFloat(image.style.width),height:parseFloat(image.style.height),...(image.dataset.inkParagraphY===undefined?{}:{paragraphY:Number(image.dataset.inkParagraphY)})}}))}
+     else{selection=app.get().marks.filter(m=>m.kind==='ink'&&m.page===selectedPage).filter(m=>{const r=drawingBounds([m]);return (g.mode!=='lasso'||m.points.some(inside))&&r[2]>=rect[0]&&r[3]>=rect[1]&&r[0]<=rect[2]&&r[1]<=rect[3]}).map(m=>m.id)}
      const count=selection.length||wordSelection.length;app.status(count+' drawings selected.');message.textContent=count+' drawings selected.';panel.showModal()
    }else if(Math.hypot(end[0]-g.start[0],end[1]-g.start[1])>2){
      const strokes=shapeStrokes(g.mode,g.start,end)

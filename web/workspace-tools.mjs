@@ -1,3 +1,4 @@
+import {scanWarnings} from './scan-quality.mjs'
 import {installFilterGallery} from './filter-gallery.mjs'
 import { readScanDraft, storeScanDraft } from './scan-drafts.mjs'
 import { installProductivity } from './productivity-tools.mjs'
@@ -97,10 +98,7 @@ export function installTools(app) {
   const scanQuality=document.createElement('p');scanQuality.setAttribute('role','status');$('scan-preview').after(scanQuality)
   async function checkPhoto(file){
     const bitmap=await createImageBitmap(file),canvas=document.createElement('canvas');canvas.width=200;canvas.height=Math.max(20,Math.round(200*bitmap.height/bitmap.width));const ctx=canvas.getContext('2d');ctx.drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close()
-    const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;let light=0,edges=0
-    for(let i=0;i<pixels.length;i+=4){light+=(pixels[i]+pixels[i+1]+pixels[i+2])/3;if(i>=4)edges+=Math.abs(pixels[i]-pixels[i-4])}
-    light/=pixels.length/4;edges/=pixels.length/4
-    scanQuality.textContent=light<65?'This photo looks dark. Review the text or retake with more light.':edges<2?'This photo has little detail. Check focus and text clarity before saving.':'Review the crop and text clarity before creating the PDF.'
+    const warnings=scanWarnings(ctx.getImageData(0,0,canvas.width,canvas.height).data,canvas.width,canvas.height,scans[scanIndex]?.corners);scanQuality.textContent=warnings.length?warnings.join(' '):'Quality check: review the crop and text clarity before saving.'
   }
   const drawCrop=()=>{
     const item=scans[scanIndex];if(!item)return

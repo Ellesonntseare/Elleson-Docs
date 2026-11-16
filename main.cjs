@@ -7,6 +7,22 @@ if (process.env.ELLESON_DOCS_USER_DATA) app.setPath("userData", process.env.ELLE
 
 let window
 let host
+let openingWindow
+function showMainWindow(){
+  if(quitting)return
+  if(window&&!window.isDestroyed()){if(window.isMinimized())window.restore();window.show();window.focus();return}
+  if(openingWindow)return
+  openingWindow=true
+  try{
+    window=new BrowserWindow({title:"Elleson Docs",width:1220,height:870,minWidth:460,minHeight:420,autoHideMenuBar:true,backgroundColor:"#eef1ed",show:process.env.ELLESON_DOCS_TEST!=="1",icon:path.join(__dirname,"web","logo.png"),webPreferences:{preload:path.join(__dirname,"preload.cjs"),sandbox:true,contextIsolation:true}})
+    window.webContents.setWindowOpenHandler(()=>({action:"deny"}))
+    window.webContents.on("will-navigate",event=>event.preventDefault())
+    window.once("closed",()=>{window=null;if(!quitting)app.quit()})
+    window.webContents.on("render-process-gone",(_event,details)=>{if(!quitting&&details.reason!=="clean-exit"&&host)void window.loadURL(host.address+"/#owner="+host.owner).catch(error=>dialog.showErrorBox("Elleson Docs",error.message))})
+    if(host)void window.loadURL(host.address+"/#owner="+host.owner).catch(error=>dialog.showErrorBox("Elleson Docs",error.message))
+    else void window.loadURL("data:text/html;charset=utf-8,"+encodeURIComponent('<title>Elleson Docs</title><body><h1>Elleson Docs</h1><p>Opening your workspace...</p></body>'))
+  }finally{openingWindow=false}
+}
 let quitting = false
 app.on('before-quit', () => { quitting = true })
 let pending = process.argv.find(value => /\.(pdf|docx?|png|jpe?g|webp|gif|bmp)$/i.test(value))
@@ -56,10 +72,11 @@ else {
     const filename = args.find(value => /\.(pdf|docx?|png|jpe?g|webp|gif|bmp)$/i.test(value))
     if (host) void openDocument(filename)
     else if (filename) pending = filename
-    if (window?.isMinimized()) window.restore()
-    window?.focus()
+    if(app.isReady())showMainWindow()
   })
+  app.on("activate",()=>{if(app.isReady())showMainWindow()})
   app.whenReady().then(async () => {
+    showMainWindow()
     const portFile = path.join(app.getPath("userData"), "port.json")
     let preferred = process.env.ELLESON_DOCS_TEST === "1" ? 0 : 16943
     try { preferred = process.env.ELLESON_DOCS_TEST === "1" ? 0 : JSON.parse(await fs.readFile(portFile, "utf8")).port || preferred } catch {}
@@ -71,15 +88,6 @@ else {
       const entries = JSON.parse(await fs.readFile(path.join(app.getPath("userData"), "original-files.json"), "utf8"))
       for (const [id, entry] of entries) if (/^[a-f0-9-]{36}$/.test(id) && typeof entry.filename === "string" && path.isAbsolute(entry.filename) && typeof entry.hash === "string") originalFiles.set(id, entry)
     } catch {}
-    window = new BrowserWindow({
-      title: "Elleson Docs", width: 1220, height: 870, minWidth: 460, minHeight: 420,
-      autoHideMenuBar: true, backgroundColor: "#eef1ed",
-      show: process.env.ELLESON_DOCS_TEST !== "1",
-      icon: path.join(__dirname, "web", "logo.png"),
-      webPreferences: { preload: path.join(__dirname, "preload.cjs"), sandbox: true, contextIsolation: true }
-    })
-    window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
-    window.webContents.on("will-navigate", event => event.preventDefault())
     ipcMain.handle('app-version',event=>{if(event.sender===window.webContents)return app.getVersion()})
     ipcMain.handle('download-update',async(event,url,digest)=>{
       if(event.sender!==window.webContents)throw Error('Open the updater from Elleson Docs.')
@@ -182,7 +190,7 @@ else {
     await window.loadURL(host.address + "/#owner=" + host.owner)
     await openDocument(pending)
   }).catch(error => {
-    if (quitting || window?.isDestroyed()) return
+    if (quitting) return
     dialog.showErrorBox("Elleson Docs", error.message)
     app.quit()
   })
