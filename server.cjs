@@ -267,7 +267,7 @@ async function start(port = 0, recoveryDirectory) {
     if(request.role!=='pc')return response.sendStatus(403)
     if(document?.id!==request.params.id||request.body.version!==document.contentVersion)return response.sendStatus(409)
     const pages=request.body.pages
-    if(!Array.isArray(pages)||pages.length>1000||!pages.every(p=>Number.isFinite(p.width)&&Number.isFinite(p.height)&&Array.isArray(p.paragraphs)&&p.paragraphs.every(q=>Number.isInteger(q.index)&&Array.isArray(q.characters)&&q.characters.every(c=>typeof c.text==='string'&&c.text.length<=2&&[c.x,c.y,c.width,c.height].every(Number.isFinite)))))return response.sendStatus(400)
+    if(!Array.isArray(pages)||pages.length>1000||!pages.every(p=>Number.isFinite(p.width)&&Number.isFinite(p.height)&&Array.isArray(p.paragraphs)&&p.paragraphs.every(q=>Number.isInteger(q.index)&&Array.isArray(q.characters)&&q.characters.every(c=>typeof c.text==='string'&&c.text.length<=10000&&[c.x,c.y,c.width,c.height].every(Number.isFinite)))))return response.sendStatus(400)
     wordLayouts.clear();wordLayouts.set(document.id,request.body);response.sendStatus(204)
   })
   web.post("/api/handoff", (request, response) => {

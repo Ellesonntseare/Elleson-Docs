@@ -2,6 +2,27 @@ const {test}=require('node:test'),assert=require('node:assert/strict')
 const {chromium}=require('playwright'),{PDFDocument}=require('pdf-lib'),{start}=require('../server.cjs')
 const {clickTool}=require('./menu-helper.cjs')
 
+test('Undo clears an unfinished pen tip and the eraser removes a single pen dot',{timeout:60000},async()=>{
+  const host=await start();let browser
+  try{
+    const pdf=await PDFDocument.create();pdf.addPage([400,600]);await host.open('Ink actions.pdf',await pdf.save())
+    browser=await chromium.launch({channel:'msedge'});const page=await browser.newPage()
+    await page.goto(host.address+'/#owner='+host.owner);await page.getByText('PDF ready',{exact:true}).waitFor()
+    await clickTool(page,page.locator('[data-mode=pen]'))
+    const box=await page.locator('#ink-canvas').boundingBox(),x=box.x+box.width*.3,y=box.y+box.height*.3
+    await page.mouse.move(x,y);await page.mouse.down();await page.mouse.move(x+25,y+15)
+    assert.equal(await page.locator('.live-ink-tip').isVisible(),true)
+    await page.keyboard.press('Control+z');await page.waitForFunction(()=>document.querySelector('.live-ink-tip').hidden);await page.mouse.up()
+    assert.equal(host.getDocument().marks.length,0)
+    await page.mouse.click(x,y)
+    const deadline=Date.now()+3000;while(!host.getDocument().marks.length&&Date.now()<deadline)await new Promise(r=>setTimeout(r,20))
+    assert.equal(host.getDocument().marks[0].points.length,1)
+    await clickTool(page,page.locator('[data-mode=erase]'));await page.mouse.click(x,y)
+    const erased=Date.now()+3000;while(host.getDocument().marks.length&&Date.now()<erased)await new Promise(r=>setTimeout(r,20))
+    assert.equal(host.getDocument().marks.length,0)
+  }finally{await browser?.close();host.server.closeAllConnections();await new Promise(r=>host.server.close(r))}
+})
+
 test('preview sender coalesces slow requests without replaying stale positions',async()=>{
   const {createInkStream}=await import('../web/live-ink.mjs')
   const sent=[];let release

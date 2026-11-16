@@ -1,6 +1,6 @@
-ELLESON DOCS 0.4.15
+ELLESON DOCS 0.4.16
 
-Elleson Docs 0.4.15. See resources/app/UPDATE-STATUS.md for features and verification.
+Elleson Docs 0.4.16. See resources/app/UPDATE-STATUS.md for features and verification.
 New: Convert files, New documents, scanner filters, drawing Done, continuous
 reading, password-protected PDF copies, Save As, Rename, and easier pairing.
 More contains additional saving, scanning, printing and document actions.
@@ -14,7 +14,7 @@ Save a copy exports separately. External file changes require a choice.
 Ctrl+S saves; Ctrl+Shift+S saves a copy.
 
 ANDROID AND LIVE EDITING
-Install Elleson-Docs-Android-0.4.15.apk on Android 8 or newer.
+Install Elleson-Docs-Android-0.4.16.apk on Android 8 or newer.
 Open documents on phone works independently for PDF and DOCX.
 For live editing, keep Windows open and use the same trusted Wi-Fi.
 Open the phone app: it finds the PC and connects without codes or approval.

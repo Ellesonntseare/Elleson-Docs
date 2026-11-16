@@ -1,5 +1,20 @@
 let cachedDocument, cachedParagraphs = new Map()
 
+// Some Word font features make computedStyle.font an empty string. Copy the
+// actual properties so a large heading cannot silently inherit body-text size.
+const fontProperties=['fontFamily','fontSize','fontWeight','fontStyle','fontStretch','fontVariant','fontFeatureSettings','fontVariationSettings','letterSpacing','wordSpacing','textDecoration','textTransform','direction']
+function fontStyle(style){return Object.fromEntries(fontProperties.map(name=>[name,style[name]]))}
+export function layoutRuns(characters){
+ const runs=[]
+ for(const c of characters){
+  const previous=runs.at(-1),key=JSON.stringify([c.font,c.style,c.color])
+  if(previous&&previous.key===key&&Math.abs(previous.y-c.y)<.2&&Math.abs(previous.height-c.height)<.2&&Math.abs(previous.x+previous.width-c.x)<.3){
+   previous.text+=c.text;previous.width=c.x+c.width-previous.x
+  }else runs.push({...c,key})
+ }
+ return runs.map(({key,...run})=>run)
+}
+
 // Versioned PC geometry is the authority for connected Word clients.
 export async function shareWordLayout({sheet,source,role,request}) {
  const pages=[...sheet.querySelectorAll('section.docx')]
@@ -12,13 +27,13 @@ export async function shareWordLayout({sheet,source,role,request}) {
   const geometry=pages.map(page=>{const box=page.getBoundingClientRect(),scale=box.width/page.offsetWidth
    const paragraphs=[...page.querySelectorAll('[data-word-source-index]')].map(p=>{
     const r=p.getBoundingClientRect(),index=Number(p.dataset.wordSourceIndex)
-    const key=[p.outerHTML,r.width/scale,r.height/scale,getComputedStyle(p).cssText].join('|')
+    const key=[p.outerHTML,r.width/scale,r.height/scale,JSON.stringify(fontStyle(getComputedStyle(p)))].join('|')
     const cached=cachedParagraphs.get(index)
     const characters=cached?.key===key?cached.characters:[]
     const walker=document.createTreeWalker(p,NodeFilter.SHOW_TEXT)
-    let node;while(cached?.key!==key&&(node=walker.nextNode())){const s=getComputedStyle(node.parentElement);for(let i=0;i<node.length;i++){const range=document.createRange();range.setStart(node,i);range.setEnd(node,i+1);const b=range.getBoundingClientRect();characters.push({text:node.textContent[i],x:(b.left-r.left)/scale,y:(b.top-r.top)/scale,width:b.width/scale,height:b.height/scale,font:s.font,color:s.color})}}
+    let node;while(cached?.key!==key&&(node=walker.nextNode())){const s=getComputedStyle(node.parentElement),style=fontStyle(s);for(let i=0;i<node.length;i++){const range=document.createRange();range.setStart(node,i);range.setEnd(node,i+1);const b=range.getBoundingClientRect();characters.push({text:node.textContent[i],x:(b.left-r.left)/scale,y:(b.top-r.top)/scale,width:b.width/scale,height:b.height/scale,font:s.font,style,color:s.color})}}
     nextCache.set(index,{key,characters})
-    return {index,x:(r.left-box.left)/scale,y:(r.top-box.top)/scale,width:r.width/scale,height:r.height/scale,characters}
+    return {index,x:(r.left-box.left)/scale,y:(r.top-box.top)/scale,width:r.width/scale,height:r.height/scale,characters:layoutRuns(characters)}
    });const objects=[...page.querySelectorAll('table,img:not(.word-saved-ink)')].map(el=>{const r=el.getBoundingClientRect();return {x:(r.left-box.left)/scale,y:(r.top-box.top)/scale,width:r.width/scale,height:r.height/scale}});return {width:page.offsetWidth,height:page.offsetHeight,paragraphs,objects}
   })
   cachedParagraphs=nextCache
@@ -35,7 +50,8 @@ export async function shareWordLayout({sheet,source,role,request}) {
   for(const item of data.paragraphs){const p=sheet.querySelector('[data-word-source-index="'+item.index+'"]');if(!p)continue
    if(p.querySelector('img,svg,canvas'))continue
    const fragment=document.createDocumentFragment();p.replaceChildren();Object.assign(p.style,{position:'absolute',left:item.x+'px',top:item.y+'px',width:item.width+'px',height:item.height+'px',margin:'0',padding:'0'})
-   for(const c of item.characters){const span=document.createElement('span');span.textContent=c.text;Object.assign(span.style,{position:'absolute',left:c.x+'px',top:c.y+'px',width:c.width+'px',height:c.height+'px',font:c.font,color:c.color,whiteSpace:'pre'});fragment.append(span)}
+   const runs=layoutRuns(item.characters)
+   for(const c of runs){const span=document.createElement('span');span.textContent=c.text;Object.assign(span.style,{position:'absolute',left:c.x+'px',top:c.y+'px',width:c.width+'px',height:c.height+'px',font:c.font,...c.style,color:c.color,whiteSpace:'pre'});fragment.append(span)}
    p.append(fragment)
    p.addEventListener('beforeinput',()=>{
     if(!p.querySelector('span[style]'))return
@@ -45,7 +61,7 @@ export async function shareWordLayout({sheet,source,role,request}) {
     if(p.firstChild)selection.setBaseAndExtent(p.firstChild,Math.min(anchor,p.textContent.length),p.firstChild,Math.min(focus,p.textContent.length))
    },{once:true})
    page.append(p)
-   glyphs.push({p,page,data,item})
+   glyphs.push({p,page,data,item:{...item,characters:runs}})
   }
  }
  // Position the entire document before measuring glyphs. Yielding after each
@@ -56,10 +72,10 @@ export async function shareWordLayout({sheet,source,role,request}) {
    for(const [index,span] of [...p.children].entries()){
      const c=item.characters[index],range=document.createRange();range.selectNodeContents(span)
      const glyph=range.getBoundingClientRect(),box=span.getBoundingClientRect()
-     corrections.push({span,top:c.y-(glyph.top-box.top)/scale,factor:glyph.width>0&&c.width>0?c.width*scale/glyph.width:1})
+     corrections.push({span,top:c.y-(glyph.top-box.top)/scale})
    }
  }
- for(const {span,top,factor} of corrections){span.style.top=top+'px';span.style.transformOrigin='left top';span.style.transform='scaleX('+factor+')'}
+ for(const {span,top} of corrections)span.style.top=top+'px'
  for(const page of pages){page.style.contentVisibility='auto';page.style.containIntrinsicSize=page.offsetWidth+'px '+page.offsetHeight+'px'}
  sheet.dataset.sharedLayout=String(source.contentVersion)
 }

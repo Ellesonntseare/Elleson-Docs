@@ -1,3 +1,12 @@
+# Elleson Docs 0.4.16
+
+- Bug review: Undo now removes the temporary live pen tip when cancelling an unfinished stroke. Eraser hit detection now includes single-dot strokes. Regression coverage exercises both actions.
+
+- Connected Word layout transfers explicit font properties, including font size and font features. This fixes a reproduced case where an empty browser font shorthand caused large text to inherit smaller body text on the phone.
+- Phone Word text uses contiguous runs instead of a positioned element per letter. Shared layout payloads are compacted to the same runs. Horizontal glyph squeezing was removed; original font sizes and natural glyph shapes are retained.
+- Routine document polling is reduced from every 150 ms to every 500 ms and pauses during pinch navigation. Ink and navigation continue using their live stream.
+- Regression checks verify a 32 px styled heading retains its height and width, text uses fewer elements, phone/PC glyph positions match, and Word editing, drawing, shared zoom and the tap toolbar continue working. This is not a claim that all Word compatibility or physical-phone lag is resolved.
+
 # Elleson Docs 0.4.15
 
 - Tap a picture or blank page area to select the page and reveal Add text, Draw, Sign and Tools near the document. Word pages offer Edit text. Pinching, scrolling and active handwriting do not trigger the toolbar.

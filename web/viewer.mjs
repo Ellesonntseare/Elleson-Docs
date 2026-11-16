@@ -1301,7 +1301,7 @@ $.print.addEventListener("click", async () => {
 })
 async function universalUndo(){
   if($['signature-dialog'].open){$['signature-undo'].click();return}
-  if(draft){inputDrafts.acknowledge(current.id,draft);draft=null;drawMarks();await postJson('/api/preview/'+current.id,{});return}
+  if(draft){inputDrafts.acknowledge(current.id,draft);draft=null;inkTip.clear();drawMarks();streamInk(current.id,{});return}
   document.activeElement?.blur();flushWord();await pendingEdit
   if(current?.lines&&await wordInk.undoPending())return
   await edit({kind:'history-undo'});if(current?.lines)await renderWord()
@@ -1444,6 +1444,7 @@ inkCanvas.addEventListener("pointerdown", event => {
       if (mark.page !== page) return false
       if (mark.kind === "text") return at[0] >= mark.at[0] && at[0] <= mark.at[0] + mark.value.length * mark.size * .65 &&
         at[1] >= mark.at[1] - 4 && at[1] <= mark.at[1] + mark.size
+      if(mark.points.length===1)return Math.hypot(at[0]-mark.points[0][0],at[1]-mark.points[0][1])<(mark.width||2)/2+7
       return mark.points.some((point, index) => {
         if (!index) return false
         const previous = mark.points[index - 1]
@@ -1659,7 +1660,7 @@ window.addEventListener("elleson-open-file", event => void (async () => {
 
 })().catch(fail))
 void refresh().then(async () => { window.EllesonAndroid?.ready?.(); await tools.acceptPendingHandoff() }).catch(fail)
-setInterval(() => void refresh(), 150)
+setInterval(() => {if($.stage.dataset.navigating!=='true')void refresh()}, 500)
 import { installCompactMenus } from './compact-menus.mjs'
 installCompactMenus()
 installDrawingSettings()
