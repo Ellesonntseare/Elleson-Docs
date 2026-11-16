@@ -327,6 +327,7 @@ function setMode(value) {
 }
 
 function refresh() {
+  if(draft||wordInk.drawing||$.stage.dataset.navigating==='true')return Promise.resolve()
   if (refreshPending) return refreshPending
   refreshPending = (async () => {
     if (!credential) return
@@ -334,6 +335,7 @@ function refresh() {
       const marker = localSequence
       const response = await request("/api/state?revision=" + revision)
       const state = await response.json()
+      if(draft||wordInk.drawing||$.stage.dataset.navigating==='true')return
       $["recovery-warning"].hidden = !state.recoveryWarning
       $["recovery-warning"].textContent = state.recoveryWarning || ""
       networkState = location.hostname === "appassets.androidplatform.net" ? "On this phone" : state.paired ? state.phoneOnline === false ? "Phone reconnecting" : "Phone and PC connected" : "Connected"
@@ -1480,8 +1482,7 @@ inkCanvas.addEventListener("pointermove", event => {
   for(const sample of pointerSamples(event)){if(draft.points.length>=1200)break;appendPoint(draft.points,viewport.convertToPdfPoint(...canvasPoint(sample)))}
   if(Date.now()-inkJournalAt>150){inkJournalAt=Date.now();inputDrafts.save(current.id,draft)}
   localInkIds.add(draft.id)
-  if(!inkFrame)inkFrame=requestAnimationFrame(()=>{inkFrame=null;if(!draft)return;const ctx=inkCanvas.getContext('2d');ctx.setTransform(viewport.pixelRatio,0,0,viewport.pixelRatio,0,0);ctx.lineCap=ctx.lineJoin='round';ctx.strokeStyle=draft.color;ctx.lineWidth=draft.width*viewport.scale;ctx.globalAlpha=draft.opacity??1;draft.painted=incrementalStroke(ctx,draft.points,draft.painted||1,false,p=>viewport.convertToViewportPoint(...p));ctx.globalAlpha=1})
-  paintTip();streamInk(current.id,draft)
+  if(!inkFrame)inkFrame=requestAnimationFrame(()=>{inkFrame=null;if(!draft)return;const ctx=inkCanvas.getContext('2d');ctx.setTransform(viewport.pixelRatio,0,0,viewport.pixelRatio,0,0);ctx.lineCap=ctx.lineJoin='round';ctx.strokeStyle=draft.color;ctx.lineWidth=draft.width*viewport.scale;ctx.globalAlpha=draft.opacity??1;draft.painted=incrementalStroke(ctx,draft.points,draft.painted||1,false,p=>viewport.convertToViewportPoint(...p));ctx.globalAlpha=1;paintTip();streamInk(current.id,draft)})
 })
 inkCanvas.addEventListener("pointerup", event => {
   if (!draft || event.pointerId !== draft.pointer) return

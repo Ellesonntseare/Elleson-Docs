@@ -9,12 +9,18 @@ export function inkSvg(ink){
  }).join('')
  return 'data:image/svg+xml;charset=utf-8,'+encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${ink.width} ${ink.height}" width="${ink.width}" height="${ink.height}">${paths}</svg>`)
 }
-export function inkPng(ink){
+function inkCanvas(ink){
  if(!validInk(ink))throw Error('The drawing strokes are invalid.')
  const scale=Math.min(4,4096/Math.max(ink.width,ink.height)),c=document.createElement('canvas');c.width=Math.ceil(ink.width*scale);c.height=Math.ceil(ink.height*scale)
  const ctx=c.getContext('2d');ctx.scale(scale,scale);ctx.lineCap=ctx.lineJoin='round'
  for(const s of ink.strokes){ctx.strokeStyle=s.color;ctx.lineWidth=s.width;strokePath(ctx,s.points)}
- return c.toDataURL('image/png').split(',')[1]
+ return c
+}
+export function inkPng(ink){return inkCanvas(ink).toDataURL('image/png').split(',')[1]}
+export async function inkPngAsync(ink){
+ const canvas=inkCanvas(ink)
+ const blob=await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(Error('Drawing encoding failed.')),'image/png'))
+ return await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(blob)})
 }
 // Clip each line segment against the eraser disk, retaining outside fragments.
 export function cutStroke(points,center,radius){

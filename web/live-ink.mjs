@@ -5,13 +5,13 @@ export function createInkStream(request) {
     timer=undefined
     if(sending||!latest)return
     const next=latest;latest=undefined;sending=true
-    try {await request('/api/preview/'+next.document,{method:'POST',headers:{'Content-Type':'application/json'},body:next.body})} catch {} finally {
+    try {await request('/api/preview/'+next.document,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(next.mark)})} catch {} finally {
       sending=false
       if(latest&&!timer)timer=setTimeout(send,0)
     }
   }
   return (document,mark)=>{
-    latest={document,body:JSON.stringify(mark)}
+    latest={document,mark}
     if(!sending&&!timer)timer=setTimeout(send,16)
   }
 }

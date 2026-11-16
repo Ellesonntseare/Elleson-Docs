@@ -82,3 +82,10 @@ test('phone ink paints on PC before pen-up without polling, and keeps document c
     assert.deepEqual(errors,[])
   }finally{await browser?.close();host.server.closeAllConnections();await new Promise(r=>host.server.close(r))}
 })
+
+test('coalesced ink serializes only transmitted previews, not every pointer sample',async()=>{
+ const {createInkStream}=await import('../web/live-ink.mjs');let serialized=0,sent=0
+ const stream=createInkStream(async()=>sent++)
+ for(let i=0;i<200;i++)stream('document',{toJSON(){serialized++;return {points:[[i,i]]}}})
+ assert.equal(serialized,0);await new Promise(r=>setTimeout(r,40));assert.equal(serialized,1);assert.equal(sent,1)
+})

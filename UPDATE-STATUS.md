@@ -1,3 +1,10 @@
+# Elleson Docs 0.4.18
+
+- Phone drawing: serialize only the coalesced outgoing live preview, rather than every pointer event. Paint the pen tail and enqueue previews once per animation frame.
+- Pause state refresh application during drawing and pinch navigation, including requests started before the gesture.
+- Encode saved Word drawing PNGs asynchronously instead of using synchronous toDataURL.
+- Focused coverage checks live phone-to-PC ink, exported signatures, shared Word/PDF pinch, undo, and coalesced preview serialization. These checks do not establish physical-phone latency or eliminate every source of lag.
+
 # Elleson Docs 0.4.17
 
 - Verification: all 81 regression checks passed. Signed APK assets match source. Native Windows retry passed PDF open/edit/save/reopen, external-change protection, cursor zoom, wheel scrolling and image-to-PDF checks; the first concurrent launch check timed out.
