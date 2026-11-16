@@ -1,0 +1,33 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),{chromium}=require('playwright'),{PDFDocument}=require('pdf-lib'),{start}=require('../server.cjs')
+test('tap after pinch reveals page tools; Draw and Sign write without reopening the toolbar',{timeout:60000},async()=>{
+ const host=await start();let browser
+ try{
+  const pdf=await PDFDocument.create();pdf.addPage([400,600]);await host.open('Picture.pdf',await pdf.save())
+  browser=await chromium.launch({channel:'msedge'});const page=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true})
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));await page.goto(host.address+'/#owner='+host.owner);await page.getByText('PDF ready',{exact:true}).waitFor()
+  const cdp=await page.context().newCDPSession(page),box=await page.locator('#stage').boundingBox(),x=box.x+box.width/2,y=box.y+box.height*.35
+  const finger=(id,px,py)=>({id,x:px,y:py,radiusX:3,radiusY:3,force:1})
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[finger(1,x-35,y)]})
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[finger(1,x-35,y),finger(2,x+35,y)]})
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[finger(1,x-65,y),finger(2,x+65,y)]})
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]})
+  await page.waitForFunction(()=>!document.querySelector('#stage').dataset.navigating)
+  const toolbar=page.getByRole('navigation',{name:'Selected page tools'})
+  assert.equal(await toolbar.isVisible(),false,'pinching alone does not select the page')
+  await page.touchscreen.tap(x,y)
+  await toolbar.waitFor({state:'visible'})
+  for(const name of ['Add text','Draw','Sign','Tools'])assert.ok(await toolbar.getByRole('button',{name,exact:true}).isVisible())
+  await toolbar.getByRole('button',{name:'Add text',exact:true}).tap()
+  await page.waitForFunction(()=>document.querySelector('#pdf-sheet').dataset.mode==='text')
+  await page.touchscreen.tap(x,y);await page.locator('#text-dialog').waitFor({state:'visible'});await page.locator('#cancel-text').click()
+  await page.locator('.mobile-mode-dock').getByRole('button',{name:'Read',exact:true}).tap()
+  await page.touchscreen.tap(x,y);await toolbar.getByRole('button',{name:'Sign',exact:true}).tap()
+  await page.waitForFunction(()=>document.querySelector('#pdf-sheet').dataset.mode==='pen')
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[finger(1,x-25,y)]})
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[finger(1,x+25,y+20)]})
+  await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]})
+  assert.equal(await toolbar.isVisible(),false,'a writing stroke does not open page options')
+  const deadline=Date.now()+3000;while(!host.getDocument().marks.length&&Date.now()<deadline)await new Promise(r=>setTimeout(r,20))
+  assert.equal(host.getDocument().marks.length,1);assert.deepEqual(errors,[])
+ }finally{await browser?.close();host.server.closeAllConnections();await new Promise(r=>host.server.close(r))}
+})

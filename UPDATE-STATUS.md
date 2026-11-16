@@ -1,3 +1,9 @@
+# Elleson Docs 0.4.15
+
+- Tap a picture or blank page area to select the page and reveal Add text, Draw, Sign and Tools near the document. Word pages offer Edit text. Pinching, scrolling and active handwriting do not trigger the toolbar.
+- Choosing Sign writes directly on the selected page. Existing text fields, paragraph editing and saved drawing controls retain their own interactions.
+- Physical Android installation and opening the existing document were verified for 0.4.14. Overlapping text was observed in the existing assessment DOCX on the phone; that document-layout issue remains under investigation and is not claimed fixed by this toolbar update.
+
 # Elleson Docs 0.4.14
 
 - Phone companion now offers Sign on page: write directly on a PDF or Word page, use two fingers to move and zoom, and resume writing without opening a separate signature pad.

@@ -1,3 +1,4 @@
+import {installTapTools} from './tap-tools.mjs'
 import {installDocumentSuite} from './document-suite.mjs'
 import {installDrawingSuite} from './drawing-suite.mjs'
 import {installCompanion} from './companion-mode.mjs'
@@ -1680,3 +1681,4 @@ const suiteApp={get:()=>current,role:()=>role,viewport:()=>viewport,page:()=>pag
 const documentSuite=installDocumentSuite(suiteApp)
 const drawingSuite=installDrawingSuite(suiteApp,documentSuite)
 installCompanion(suiteApp,documentSuite,drawingSuite)
+installTapTools(suiteApp)
