@@ -1,3 +1,14 @@
+# Elleson Docs 0.4.17
+
+- Verification: all 81 regression checks passed. Signed APK assets match source. Native Windows retry passed PDF open/edit/save/reopen, external-change protection, cursor zoom, wheel scrolling and image-to-PDF checks; the first concurrent launch check timed out.
+
+- Filters open as a collapsible bottom panel on the main document screen. Nine thumbnails show the current page. Compare overlays a draggable vertical Before/After divider directly on the page. Apply creates a filtered PDF copy; Cancel keeps the original.
+- Camera preparation also includes filter thumbnails and the same comparison divider, with crop controls grouped separately.
+- More uses the supplied cream-and-green reference with four labelled sections.
+- Word drawings retain vector stroke metadata with a PNG fallback for other Word applications. New vector drawings support colour and thickness editing; partial erasing supports PDF ink and new Word ink. One eraser operation creates one undo entry.
+- Source-byte caching avoids repeated downloads of unchanged documents. Writing mode and save-state indicators distinguish pending Word strokes from synced changes. Conflicting text versions are retained for review, with paragraph-structure checks before restoration.
+- Physical phone drawing feel and complex Word layout fidelity remain unverified. Old Word drawings without stroke metadata remain raster images.
+
 # Elleson Docs 0.4.16
 
 - Bug review: Undo now removes the temporary live pen tip when cancelling an unfinished stroke. Eraser hit detection now includes single-dot strokes. Regression coverage exercises both actions.

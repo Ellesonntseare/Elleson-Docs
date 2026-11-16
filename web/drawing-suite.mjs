@@ -1,3 +1,4 @@
+import {inkPng} from './ink-vectors.mjs'
 export function drawingBounds(marks){
  let left=Infinity,top=Infinity,right=-Infinity,bottom=-Infinity
  for(const mark of marks)for(const [x,y] of mark.points||[mark.at]){left=Math.min(left,x);top=Math.min(top,y);right=Math.max(right,x);bottom=Math.max(bottom,y)}
@@ -36,7 +37,8 @@ export function installDrawingSuite(app,hub){
        const box={...item.position},scale=extra.scale||1;box.x=cx+(box.x-cx)*scale+(extra.dx||0);box.y=cy+(box.y-cy)*scale+(extra.dy||0);box.width*=scale;box.height*=scale;if(box.paragraphY!==undefined)box.paragraphY+=box.y-item.position.y
        if(box.x<0||box.y<0||box.x+box.width>page.offsetWidth||box.y+box.height>page.offsetHeight)throw Error('Keep the drawings inside the page.')
        const entry={target:item.target,position:box}
-       if(extra.color){const image=item.image,canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0);ctx.globalCompositeOperation='source-in';ctx.fillStyle=extra.color;ctx.fillRect(0,0,canvas.width,canvas.height);entry.png=canvas.toDataURL('image/png').split(',')[1]}
+       if(item.image.dataset.inkVectors){box.ink=JSON.parse(item.image.dataset.inkVectors);if(extra.color||extra.width){box.ink.strokes=box.ink.strokes.map(stroke=>({...stroke,color:extra.color||stroke.color,width:extra.width||stroke.width}));entry.png=inkPng(box.ink)}}else if(extra.width)throw Error('Older drawings are flat images. Resize them to change their thickness.');
+       if(extra.color&&!box.ink){const image=item.image,canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;const ctx=canvas.getContext('2d');ctx.drawImage(image,0,0);ctx.globalCompositeOperation='source-in';ctx.fillStyle=extra.color;ctx.fillRect(0,0,canvas.width,canvas.height);entry.png=canvas.toDataURL('image/png').split(',')[1]}
        items.push(entry)
      }
      await app.request('/api/word-ink-batch/'+doc.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:app.editId(),version:doc.contentVersion,action:type,items})});await app.refresh();wordSelection=[]
@@ -45,7 +47,7 @@ export function installDrawingSuite(app,hub){
    message.textContent=type==='delete'?'Drawings deleted. Undo can restore them.':'Drawing changes saved.';return true
  }
  button('Apply colour',()=>transform('apply',{color:color.value}),edits)
- button('Apply pen size',()=>{if(wordSelection.length)throw Error('Saved Word ink is an image. Resize the selection to change its apparent thickness.');return transform('apply',{width:Number(width.value)})},edits)
+ button('Apply pen size',()=>{return transform('apply',{width:Number(width.value)})},edits)
  button('Larger',()=>transform('apply',{scale:1.15}),edits);button('Smaller',()=>transform('apply',{scale:1/1.15}),edits)
  button('Duplicate',()=>transform('duplicate',{dx:12,dy:app.get()?.extension==='pdf'?-12:12}),edits);button('Delete',()=>transform('delete'),edits)
  for(const [label,dx,dy]of [['Move left',-5,0],['Move right',5,0],['Move up',0,-5],['Move down',0,5]])button(label,()=>transform('apply',{dx,dy:app.get()?.extension==='pdf'?-dy:dy}),edits)

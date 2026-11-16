@@ -1,3 +1,4 @@
+import {inkSvg} from './ink-vectors.mjs'
 // Preserve page geometry; scale the whole page rather than reflowing its contents.
 export function installWordPageSizing(sheet, stage) {
   let magnification = 1
@@ -67,7 +68,7 @@ export async function renderWordPages(bytes, container, styles) {
   for (const item of ink) {
     const page=container.querySelector('[data-word-source-index="'+item.index+'"]')?.closest('section.docx')
     if (!page) continue
-    const image=document.createElement('img');image.className='word-saved-ink';image.alt='Edit handwritten drawing';image.tabIndex=0;image.setAttribute('role','button');image.src=item.data;image.dataset.inkTarget=item.id;image.dataset.inkParagraph=String(item.index);if(Number.isFinite(item.paragraphY))image.dataset.inkParagraphY=String(item.paragraphY)
+    const image=document.createElement('img');image.className='word-saved-ink';image.alt='Edit handwritten drawing';image.tabIndex=0;image.setAttribute('role','button');image.src=inkSvg(item.ink)||item.data;if(item.ink)image.dataset.inkVectors=JSON.stringify(item.ink);image.dataset.inkTarget=item.id;image.dataset.inkParagraph=String(item.index);if(Number.isFinite(item.paragraphY))image.dataset.inkParagraphY=String(item.paragraphY)
     seenInk.add(item.id)
     Object.assign(image.style,{left:item.x+'px',top:item.y+'px',width:item.width+'px',height:item.height+'px'})
     page.append(image)

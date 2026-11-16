@@ -1,3 +1,4 @@
+import {applyInkCut} from './ink-cut.mjs'
 import {drawPdfInk} from './ink-export.mjs'
 import { fieldValues, sameValue, validFieldValue, setFieldValue, flattenPdfForm } from './pdf-fields.mjs'
 import { PDFDocument, StandardFonts, rgb, degrees } from "pdf-lib"
@@ -331,8 +332,8 @@ export async function install() {
       const index = Number(headers.get("X-Paragraph-Index"))
       if (Number(headers.get("X-Document-Version")) !== file.contentVersion || !file.lines?.[index]) throw new Error("Select the paragraph again.")
       const before = capture(file)
-      const bytes = new Uint8Array(await options.body.arrayBuffer())
-      const position = headers.get('X-Word-Ink') ? JSON.parse(headers.get('X-Word-Ink')) : undefined
+      const bytes = headers.get('Content-Type')==='application/json'?Uint8Array.from(atob(body.png),c=>c.charCodeAt(0)):new Uint8Array(await options.body.arrayBuffer())
+      const position = headers.get('Content-Type')==='application/json'?body.position:headers.get('X-Word-Ink') ? JSON.parse(headers.get('X-Word-Ink')) : undefined
       file.bytes = await source(undefined, { ...imageInfo(bytes), bytes, index, position })
       file.wordEdits = {}
       file.wordFormats = {}
@@ -466,6 +467,7 @@ export async function install() {
         if (!validFieldValue(body.value)) throw new Error("Choose a valid field value.")
         file.fields[body.name] = body.value
       }
+      else if (body.kind === "ink-cut" && file.extension === "pdf") file.marks=applyInkCut(file.marks,body)
       else if (body.kind === "transform") file.marks = changeMarks(file.marks, body)
       else if (body.kind === "review") {
         if (body.version !== file.contentVersion) throw new Error("The page changed.")

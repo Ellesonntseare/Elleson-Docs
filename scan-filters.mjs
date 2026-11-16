@@ -15,6 +15,7 @@ export function applyScanFilter(data, width, height, options = {}) {
     const mean = (integral[bottom * stride + right] - integral[top * stride + right] - integral[bottom * stride + left] + integral[top * stride + left]) / ((right - left) * (bottom - top))
     for (let c = 0; c < 3; c++) {
       let value = source[i + c]
+      if (filter === 'invert') value = 255-value
       if (filter === 'grayscale') value = light
       if (filter === 'bw') value = light < 160 ? 0 : 255
       if (filter === 'receipt') value = light < mean - 14 ? 0 : 255

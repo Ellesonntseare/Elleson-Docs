@@ -1,3 +1,8 @@
+import {installPartialEraser} from './partial-eraser.mjs'
+import {restyleMoreMenu} from './more-menu.mjs'
+import {installConflictHistory} from './conflict-history.mjs'
+import {createDocumentCache} from './document-cache.mjs'
+import {installWorkState} from './work-state.mjs'
 import {installTapTools} from './tap-tools.mjs'
 import {installDocumentSuite} from './document-suite.mjs'
 import {installDrawingSuite} from './drawing-suite.mjs'
@@ -31,6 +36,7 @@ import { installCompareView } from './compare-view.mjs'
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdfjs/legacy/build/pdf.worker.mjs"
 const converter = installConverter(pdfjs)
+const sourceCache=createDocumentCache()
 const byId = id => document.getElementById(id)
 const $ = Object.fromEntries(Array.from(document.querySelectorAll("[id]"), item => [item.id, item]))
 const passwordDialog=document.createElement('dialog')
@@ -303,6 +309,7 @@ $["mobile-tabs"].addEventListener("change", () => {
 })
 
 function setMode(value) {
+  const previousMode=mode
   mode = value
   draft = null;inkTip.clear()
   $["pdf-sheet"].dataset.mode = mode
@@ -313,7 +320,7 @@ function setMode(value) {
     status({ read: "View document", edit: "Select existing text to edit it in its original font.", text: "Tap or click where the text should go.", pen: "Draw directly on the page.", highlight: "Draw a highlight over the page.", erase: "Tap an added text or ink mark to erase it.", signature: "Tap the page to place the signature.", select: "Tap added content to move, resize, rotate or duplicate it.", review: "Tap for a note, or drag across the words to mark up." }[mode])
     if (mode === "edit") void createTextTargets()
   } else if (current) {
-    renderWord()
+    if(previousMode!==value||$["word-sheet"].dataset.renderDocument!==current.id)void renderWord()
     status(mode === "word" ? "Edit an outlined paragraph. Changes sync as you type." : "View Word text")
   }
   tools.updated()
@@ -430,6 +437,7 @@ function edit(change) {
         return true
       }
       if (error.status === 409 && ["field", "word"].includes(change.kind) && Object.hasOwn(error.problem || {}, "actual")) {
+        conflictHistory.remember(id,payload,error.problem.actual)
         if (confirm("This entry was changed on the other device. Choose OK to keep your entry, or Cancel to use the latest entry.")) {
           const retry = { ...change, id: editId(), before: error.problem.actual }
           try {
@@ -469,6 +477,7 @@ async function drainQueue() {
       catch (error) {
         if (!error.status) break
         if (error.status === 409 && Object.hasOwn(error.problem || {}, "actual")) {
+          conflictHistory.remember(queued.document,queued.change,error.problem.actual)
           if (sameValue(error.problem.actual, queued.change.value)) { /* Already received before this device restarted. */ }
           else if (confirm("A queued field entry conflicts with the other device. Keep your queued entry? Cancel uses the latest entry.")) { queued.change.before = error.problem.actual; queued.change.id = editId(); persistQueue(); continue }
         } else {
@@ -533,8 +542,7 @@ async function loadPdf(id) {
   try {
     if (loadingTask) await loadingTask.destroy().catch(() => {})
     const sourceUrl = "/api/source/" + id + "?v=" + current.contentVersion
-    const localData = location.hostname === "appassets.androidplatform.net"
-      ? new Uint8Array(await (await request(sourceUrl)).arrayBuffer()) : null
+    const localData = new Uint8Array((await sourceCache.load(id+':'+current.contentVersion,async()=>await (await request(sourceUrl)).arrayBuffer())).slice(0))
     const task = pdfjs.getDocument({
       ...(localData ? { data: localData } : { url: sourceUrl }), httpHeaders: { Authorization: "Bearer " + credential },
       cMapUrl: "/pdfjs/cmaps/", cMapPacked: true, standardFontDataUrl: "/pdfjs/standard_fonts/",
@@ -542,7 +550,7 @@ async function loadPdf(id) {
     })
     loadingTask = task
     const opened = await task.promise
-    if (current?.id !== id) { await task.destroy(); return }
+    if (current?.id !== id || sequence !== loadSequence) { await task.destroy(); return }
     pdf = opened
     page = Math.min(page, opened.numPages)
     createThumbnails()
@@ -843,11 +851,13 @@ async function renderWord() {
   }
   if (source.extension === "docx" && window.docx) {
     try {
-      const data = await (await request("/api/source/" + source.id)).arrayBuffer()
+      const cacheKey=source.id+':'+source.contentVersion
+      const data = await sourceCache.load(cacheKey,async()=>await (await request('/api/source/'+source.id)).arrayBuffer())
       const container = document.createElement("div")
       const styles = document.createElement("div")
       await renderWordPages(data, container, styles)
       if (render !== wordRender || current?.id !== source.id || current.contentVersion !== source.contentVersion) return
+      if(editingWord&&sheet.querySelector("[data-word-index]"))return
       $["word-sheet"].classList.add("word-rich")
       $["word-sheet"].replaceChildren(styles, container)
       wordPageSizing.fit()
@@ -864,6 +874,7 @@ async function renderWord() {
       positionAnchoredInk(sheet)
       restore()
       wordInk.attach(source)
+      sheet.dataset.renderDocument=source.id
       return
     } catch (error) {
       fail(error)
@@ -1664,7 +1675,7 @@ setInterval(() => {if($.stage.dataset.navigating!=='true')void refresh()}, 500)
 import { installCompactMenus } from './compact-menus.mjs'
 installCompactMenus()
 installDrawingSettings()
-installDocumentFilters({get:()=>current,request,pdfjs,pending:async()=>{document.activeElement?.blur();flushWord();await pendingEdit},refresh:async()=>{revision=-1;await refresh()},fail})
+installDocumentFilters({get:()=>current,request,pdfjs,navigate:go,pending:async()=>{document.activeElement?.blur();flushWord();await pendingEdit},refresh:async()=>{revision=-1;await refresh()},fail})
 
 installModernUI()
 installSelectionTools($.stage)
@@ -1680,6 +1691,10 @@ const suiteApp={get:()=>current,role:()=>role,viewport:()=>viewport,page:()=>pag
  refresh:async()=>{revision=-1;await refresh()},
  open:async(name,bytes)=>{document.activeElement?.blur();flushWord();await pendingEdit;await request('/api/open',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Filename':encodeURIComponent(name)},body:bytes});revision=-1;await refresh()}}
 const documentSuite=installDocumentSuite(suiteApp)
+installPartialEraser({...suiteApp,pending:async()=>{await suiteApp.pending();if(current?.lines)await wordInk.pending()}})
 const drawingSuite=installDrawingSuite(suiteApp,documentSuite)
 installCompanion(suiteApp,documentSuite,drawingSuite)
 installTapTools(suiteApp)
+installWorkState({get:()=>current,mode:()=>mode})
+const conflictHistory=installConflictHistory({get:()=>current,apply:edit,fail})
+restyleMoreMenu()

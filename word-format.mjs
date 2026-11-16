@@ -1,3 +1,4 @@
+import {validInk} from './web/ink-vectors.mjs'
 import {unzipSync,zipSync,strFromU8,strToU8} from 'fflate'
 import {DOMParser,XMLSerializer} from '@xmldom/xmldom'
 export const wordNamespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
@@ -219,7 +220,7 @@ export function insertImage(document, archive, image, Parser, Serializer, fromBy
 }
 
 export function validInkPosition(position) {
-  return position && ['x','y','width','height'].every(key=>typeof position[key]==='number'&&Number.isFinite(position[key])) && (position.paragraphY===undefined||Number.isFinite(position.paragraphY)&&Math.abs(position.paragraphY)<=5000) && position.x>=0 && position.y>=0 && position.width>0 && position.height>0 && position.x+position.width<=5000 && position.y+position.height<=5000
+  return position && (position.ink===undefined||validInk(position.ink)) && ['x','y','width','height'].every(key=>typeof position[key]==='number'&&Number.isFinite(position[key])) && (position.paragraphY===undefined||Number.isFinite(position.paragraphY)&&Math.abs(position.paragraphY)<=5000) && position.x>=0 && position.y>=0 && position.width>0 && position.height>0 && position.x+position.width<=5000 && position.y+position.height<=5000
 }
 
 export function eraseWordInk(bytes,target){return changeWordInk(bytes,target)}
@@ -245,6 +246,8 @@ export function changeWordInk(bytes,target,position){
       const anchor=children.find(node=>node.localName==='anchor')
       const property=children.find(node=>node.localName==='docPr')
       if(!anchor||!property)continue
+      const original=JSON.parse(property.getAttribute('descr')||'{}')
+      if(position.ink===undefined&&original.ink)position={...position,ink:original.ink}
       property.setAttribute('descr',JSON.stringify(position))
       for(const [axis,value] of [['H',position.x],['V',position.paragraphY??position.y]]){
         const placement=Array.from(anchor.childNodes).find(node=>node.localName==='position'+axis)
@@ -267,12 +270,12 @@ export function changeWordInk(bytes,target,position){
 }
 
 export function changeWordInkBatch(bytes,edit){
-  if(!['apply','duplicate','delete'].includes(edit.action)||!Array.isArray(edit.items)||!edit.items.length||edit.items.length>200||! /^[a-zA-Z0-9-]{12,80}$/.test(edit.id||''))throw Error('Select valid drawings and an action.')
+  if(!['apply','duplicate','delete','erase'].includes(edit.action)||!Array.isArray(edit.items)||!edit.items.length||edit.items.length>200||! /^[a-zA-Z0-9-]{12,80}$/.test(edit.id||''))throw Error('Select valid drawings and an action.')
   if(new Set(edit.items.map(item=>item.target)).size!==edit.items.length)throw Error('Select each drawing once.')
   let result=bytes
   for(const [index,item] of edit.items.entries()){
-    if(typeof item.target!=='string'||edit.action!=='delete'&&!validInkPosition(item.position))throw Error('Choose a valid drawing position.')
-    if(edit.action==='delete'){result=changeWordInk(result,item.target);if(!result)throw Error('The drawing changed. Select it again.');continue}
+    if(typeof item.target!=='string'||edit.action!=='delete'&&!(edit.action==='erase'&&item.remove===true)&&!validInkPosition(item.position))throw Error('Choose a valid drawing position.')
+    if(edit.action==='delete'||edit.action==='erase'&&item.remove===true){result=changeWordInk(result,item.target);if(!result)throw Error('The drawing changed. Select it again.');continue}
     const archive=unzipSync(result),part='word/document.xml',rels='word/_rels/document.xml.rels',parser=new DOMParser(),xml=parser.parseFromString(strFromU8(archive[part]),'text/xml'),relationships=parser.parseFromString(strFromU8(archive[rels]),'text/xml')
     const relation=Array.from(relationships.getElementsByTagNameNS('*','Relationship')).find(node=>node.getAttribute('Target')===item.target)
     if(!relation)throw Error('The drawing changed. Select it again.')

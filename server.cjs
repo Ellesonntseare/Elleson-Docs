@@ -504,16 +504,19 @@ async function start(port = 0, recoveryDirectory) {
   web.post("/api/word-image/:id", express.raw({ type: "application/octet-stream", limit: maxBytes }), (request, response, next) => {
     const operation = editQueue.then(async () => {
       const current = document
+      const json=request.is('application/json')
+      if(json&&(typeof request.body.png!=='string'||request.body.png.length>6*1024*1024))return response.sendStatus(400)
+      const imageBytes=json?Buffer.from(request.body.png,'base64'):request.body
       const index = Number(request.get("X-Paragraph-Index"))
       const operationId = request.get("X-Operation-Id")
-      if (current?.id !== request.params.id || !current.word || !Buffer.isBuffer(request.body)) return response.sendStatus(409)
+      if (current?.id !== request.params.id || !current.word || !Buffer.isBuffer(imageBytes)) return response.sendStatus(409)
       if (current.applied.has(operationId)) { await checkpoint(); return response.json(snapshot(current)) }
       if (!Number.isInteger(index) || !current.word.lines[index] || !/^[a-zA-Z0-9-]{12,80}$/.test(operationId || "") ||
         Number(request.get("X-Document-Version")) !== current.contentVersion) return response.status(409).json({ error: "Select the paragraph again." })
       const before = history.capture(current)
       const engine = await import("./pdf-edit.mjs")
-      const position = request.get('X-Word-Ink') ? JSON.parse(request.get('X-Word-Ink')) : undefined
-      const image = { ...engine.imageInfo(request.body), bytes: request.body, index, position }
+      const position = json?request.body.position:request.get('X-Word-Ink') ? JSON.parse(request.get('X-Word-Ink')) : undefined
+      const image = { ...engine.imageInfo(imageBytes), bytes: imageBytes, index, position }
       const bytes = await saveWord(current.word, current.wordEdits, current.wordFormats, undefined, image)
       await applyWordBytes(current, bytes, !position)
       for(const role of Object.keys(previews))if(previews[role].mark?.id===operationId){delete previews[role];previewSequence++}
@@ -576,6 +579,8 @@ async function start(port = 0, recoveryDirectory) {
       if (edit.version !== current.contentVersion) throw Object.assign(new Error("The page changed. Review the latest page."), { status: 409 })
       current.bytes = (await import("./pdf-tools.mjs")).review(current.bytes, edit)
       current.contentVersion++
+    } else if (edit.kind === "ink-cut" && current.extension === "pdf") {
+      current.marks = (await import("./ink-cut.mjs")).applyInkCut(current.marks,edit)
     } else if (edit.kind === "transform" && current.extension === "pdf") {
       if (typeof edit.value === "string") (await latinFont).encodeText(edit.value)
       current.marks = (await import("./mark-tools.mjs")).changeMarks(current.marks, edit)

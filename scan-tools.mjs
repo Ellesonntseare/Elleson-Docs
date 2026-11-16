@@ -30,7 +30,7 @@ function homography(points) {
 export async function prepareImage(file, options = {}) {
   const image = await createImageBitmap(file, { imageOrientation: "from-image" })
   try {
-    const scale = Math.min(1, 2000 / Math.max(image.width, image.height)), sourceCanvas = document.createElement("canvas")
+    const scale = Math.min(1, Math.max(80,Math.min(2000,Number(options.maxDimension)||2000)) / Math.max(image.width, image.height)), sourceCanvas = document.createElement("canvas")
     sourceCanvas.width = Math.round(image.width * scale); sourceCanvas.height = Math.round(image.height * scale)
     const sourceContext = sourceCanvas.getContext("2d"); sourceContext.drawImage(image, 0, 0, sourceCanvas.width, sourceCanvas.height)
     const corners = options.corners || defaultCorners()

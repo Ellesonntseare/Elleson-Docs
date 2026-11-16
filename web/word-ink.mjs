@@ -1,3 +1,4 @@
+import {inkPng} from './ink-vectors.mjs'
 import {installWordInkEditor} from './word-ink-editor.mjs'
 import {drawingSettings,appendPoint} from './drawing-settings.mjs'
 import {createInkStream} from './live-ink.mjs'
@@ -19,7 +20,7 @@ export function installWordInk({sheet,toolbar,get,request,editId,status,fail,pen
   button('word-zoom-out','Zoom out',()=>sizing.zoom(1/1.25))
   button('word-fit','Fit width',()=>sizing.reset())
   button('word-zoom-in','Zoom in',()=>sizing.zoom(1.25))
-  const update=()=>{sheet.classList.toggle('word-drawing',active);draw.setAttribute('aria-pressed',String(active));done.disabled=saving||!records.some(r=>r.document===source?.id&&r.strokes.length);undo.disabled=saving||(!get()?.canUndo&&!records.some(r=>r.document===source?.id&&r.strokes.length));draw.disabled=!sheet.querySelector('section.docx');for(const p of sheet.querySelectorAll('[data-word-index]'))p.contentEditable=!active&&p.dataset.wordCanEdit==='true'?'plaintext-only':'false'}
+  const update=()=>{sheet.dataset.pendingInk=String(records.some(r=>r.document===source?.id&&r.strokes.length));sheet.classList.toggle('word-drawing',active);draw.setAttribute('aria-pressed',String(active));done.disabled=saving||!records.some(r=>r.document===source?.id&&r.strokes.length);undo.disabled=saving||(!get()?.canUndo&&!records.some(r=>r.document===source?.id&&r.strokes.length));draw.disabled=!sheet.querySelector('section.docx');for(const p of sheet.querySelectorAll('[data-word-index]'))p.contentEditable=!active&&p.dataset.wordCanEdit==='true'?'plaintext-only':'false'}
   const paint=(canvas)=>{const context=canvas.getContext('2d'),page=Number(canvas.dataset.inkPage);context.clearRect(0,0,canvas.width,canvas.height);context.lineCap=context.lineJoin='round';const own=[...completed,...records].filter(r=>r.document===source?.id&&r.page===page).flatMap(r=>r.strokes);const incoming=[...remoteRecords.values()].filter(r=>r.document===source?.id&&r.page===page).flatMap(r=>r.strokes);for(const stroke of [...own,...incoming]){context.strokeStyle=/^#[a-f0-9]{6}$/i.test(stroke.color)?stroke.color:'#093352';context.lineWidth=stroke.width*2;strokePath(context,stroke.points.map(([x,y])=>[x*2,y*2]))}}
   const paintAll=()=>sheet.querySelectorAll('.word-ink-layer').forEach(canvas=>{if(canvas.width>1)paint(canvas)})
   function prepareCanvas(canvas){
@@ -42,13 +43,9 @@ export function installWordInk({sheet,toolbar,get,request,editId,status,fail,pen
         if(record.version!==get().contentVersion)throw Error('This Word document changed after drawing began. The drawing is retained on this device. Reopen the same version before saving it.')
         record.sending=true;record.operation ||= editId();persist()
         const all=record.strokes.flatMap(s=>s.points),xs=all.map(p=>p[0]),ys=all.map(p=>p[1]);const padding=Math.max(...record.strokes.map(s=>s.width))/2+2,x=Math.max(0,Math.floor(Math.min(...xs)-padding)),y=Math.max(0,Math.floor(Math.min(...ys)-padding)),width=Math.min(record.width-x,Math.ceil(Math.max(...xs)-x+padding)),height=Math.min(record.height-y,Math.ceil(Math.max(...ys)-y+padding))
-        const scale=Math.min(4,4096/Math.max(width,height));const canvas=document.createElement('canvas');canvas.width=Math.ceil(width*scale);canvas.height=Math.ceil(height*scale)
-        const context=canvas.getContext('2d');context.lineCap=context.lineJoin='round'
-        for(const stroke of record.strokes){context.strokeStyle=stroke.color;context.lineWidth=stroke.width*scale;strokePath(context,stroke.points.map(([px,py])=>[(px-x)*scale,(py-y)*scale]))}
-        const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'))
-        if(!blob)throw Error('Could not prepare the drawing. Its strokes are retained.')
         record.operation ||= editId();persist()
-        const response=await request('/api/word-image/'+record.document,{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Operation-Id':record.operation,'X-Document-Version':String(record.version),'X-Paragraph-Index':String(record.index),'X-Word-Ink':JSON.stringify({x,y,width,height,paragraphY:Number.isFinite(record.anchorY)?y-record.anchorY:undefined})},body:blob})
+        const ink={width,height,strokes:record.strokes.map(s=>({...s,points:s.points.map(([px,py])=>[px-x,py-y])}))}
+        const response=await request('/api/word-image/'+record.document,{method:'POST',headers:{'Content-Type':'application/json','X-Operation-Id':record.operation,'X-Document-Version':String(record.version),'X-Paragraph-Index':String(record.index)},body:JSON.stringify({png:inkPng(ink),position:{x,y,width,height,paragraphY:Number.isFinite(record.anchorY)?y-record.anchorY:undefined,ink}})})
         const updated=await response.json();records=records.filter(r=>r!==record);completed.push(record)
         // Our own image insertion changes bytes, but leaves paragraph identities intact.
         for(const remaining of records)if(remaining.document===updated.id&&remaining.version===record.version)remaining.version=updated.contentVersion

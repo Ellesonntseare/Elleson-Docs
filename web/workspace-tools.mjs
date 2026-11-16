@@ -1,3 +1,4 @@
+import {installFilterGallery} from './filter-gallery.mjs'
 import { readScanDraft, storeScanDraft } from './scan-drafts.mjs'
 import { installProductivity } from './productivity-tools.mjs'
 import { installWordRibbon } from './word-ribbon.mjs'
@@ -441,6 +442,10 @@ export function installTools(app) {
       control.hidden = group !== "all" && (groups[key] || "view") !== group
     }
   }))
+  const scanGalleryContainer=document.createElement('div');$('scan-preview').after(scanGalleryContainer)
+  const scanGallery=installFilterGallery({select:$('scan-filter'),image:$('scan-preview'),container:scanGalleryContainer,id:'scan'})
+  const scanFrame=$('scan-preview').closest('.scan-compare-frame');$('scan-dialog').querySelector('h2').after(scanFrame,scanGalleryContainer)
+  const cropDetails=document.createElement('details');cropDetails.className='scan-adjustments';const cropSummary=document.createElement('summary');cropSummary.textContent='Crop and straighten';cropDetails.append(cropSummary,crop,$('scan-corners'),$('scan-angle').closest('label'));scanGalleryContainer.after(cropDetails)
   let scanPreviewSequence = 0
   async function previewScan() {
     const item = scans[scanIndex], sequence = ++scanPreviewSequence
@@ -449,6 +454,7 @@ export function installTools(app) {
     image.setAttribute('aria-busy', 'true')
     let replacement
     try {
+      void scanGallery.update(item.file,item).catch(app.fail)
       await checkPhoto(item.file)
       const { prepareImage } = await import("./scan-runtime.mjs")
       const blob = await prepareImage(item.file, item)
