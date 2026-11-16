@@ -9,6 +9,8 @@ test('Word drawing streams before pen-up, automatically joins the shared DOCX an
     const bounds=await phone.locator('.word-ink-layer').first().boundingBox()
     await phone.mouse.move(bounds.x+bounds.width*.2,bounds.y+bounds.height*.2);await phone.mouse.down();await phone.mouse.move(bounds.x+bounds.width*.4,bounds.y+bounds.height*.25,{steps:12})
     await waitForAsync(pc,async owner=>(await(await fetch('/api/state',{headers:{Authorization:'Bearer '+owner}})).json()).preview?.kind==='word-ink',host.owner)
+    // Visible-area ink tiles intentionally omit offscreen strokes. Observe the shared stroke near the page top.
+    await pc.locator('#stage').evaluate(stage=>stage.scrollTop=0)
     await waitForAsync(pc,()=>{const canvas=document.querySelector('.word-ink-layer'),pixels=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;for(let i=3;i<pixels.length;i+=4)if(pixels[i]>0)return true;return false})
     let releaseFirst,firstStarted
     const firstRequest=new Promise(resolve=>firstStarted=resolve),held=new Promise(resolve=>releaseFirst=resolve)

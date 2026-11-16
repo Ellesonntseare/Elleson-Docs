@@ -27,7 +27,19 @@ function homography(points) {
   }
   return rows.map(row => row[8])
 }
+let filterWorker,filterId=0
+const filterJobs=new Map()
+function workerFilter(file,options){
+ if(!filterWorker){
+  filterWorker=new Worker('/scan-filter-worker.mjs',{type:'module'})
+  filterWorker.onmessage=({data})=>{const job=filterJobs.get(data.id);if(!job)return;filterJobs.delete(data.id);data.error?job.reject(Error(data.error)):job.resolve(data.blob)}
+  filterWorker.onerror=()=>{for(const job of filterJobs.values())job.reject(Error('Filter worker failed.'));filterJobs.clear();filterWorker.terminate();filterWorker=null}
+ }
+ return new Promise((resolve,reject)=>{const id=++filterId;filterJobs.set(id,{resolve,reject});filterWorker.postMessage({id,file,options})})
+}
 export async function prepareImage(file, options = {}) {
+  if(!options.corners&&!options.angle&&typeof Worker!=='undefined'&&typeof OffscreenCanvas!=='undefined')return workerFilter(file,options)
+
   const image = await createImageBitmap(file, { imageOrientation: "from-image" })
   try {
     const scale = Math.min(1, Math.max(80,Math.min(2000,Number(options.maxDimension)||2000)) / Math.max(image.width, image.height)), sourceCanvas = document.createElement("canvas")

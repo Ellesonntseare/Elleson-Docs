@@ -310,6 +310,7 @@ $["mobile-tabs"].addEventListener("change", () => {
 
 function setMode(value) {
   const previousMode=mode
+  if(current?.lines&&['word','read'].includes(value))wordInk.stopDrawing()
   mode = value
   draft = null;inkTip.clear()
   $["pdf-sheet"].dataset.mode = mode
@@ -321,7 +322,7 @@ function setMode(value) {
     if (mode === "edit") void createTextTargets()
   } else if (current) {
     if(previousMode!==value||$["word-sheet"].dataset.renderDocument!==current.id)void renderWord()
-    status(mode === "word" ? "Edit an outlined paragraph. Changes sync as you type." : "View Word text")
+    status(mode === "word" ? "Tap text to edit. Changes sync as you type." : "View Word text")
   }
   tools.updated()
 }
@@ -860,11 +861,18 @@ async function renderWord() {
       await renderWordPages(data, container, styles)
       if (render !== wordRender || current?.id !== source.id || current.contentVersion !== source.contentVersion) return
       if(editingWord&&sheet.querySelector("[data-word-index]"))return
+      const layoutSheet=document.createElement('div')
+      layoutSheet.className='word-sheet word-rich'
+      Object.assign(layoutSheet.style,{position:'fixed',left:'-20000px',top:'0',visibility:'hidden',width:sheet.style.width,zoom:sheet.style.zoom||'1'})
+      layoutSheet.append(styles,container);document.body.append(layoutSheet)
+      try{await shareWordLayout({sheet:layoutSheet,source,role,request})}finally{layoutSheet.remove()}
+      while(wordInk.drawing&&render===wordRender)await new Promise(requestAnimationFrame)
+      if(render!==wordRender||current?.id!==source.id||current.contentVersion!==source.contentVersion)return
+      if(editingWord&&sheet.querySelector('[data-word-index]'))return
       $["word-sheet"].classList.add("word-rich")
       $["word-sheet"].replaceChildren(styles, container)
+      if(layoutSheet.dataset.sharedLayout)sheet.dataset.sharedLayout=layoutSheet.dataset.sharedLayout
       wordPageSizing.fit()
-      await shareWordLayout({sheet,source,role,request})
-      if(render!==wordRender||current?.id!==source.id)return
       const paragraphs = Array.from(container.querySelectorAll("[data-word-source-index]"))
       let position = 0
       for (const element of paragraphs) {
@@ -1633,12 +1641,12 @@ const readingView = installReadingView({ pdfjs, request, get: () => current, go,
 const wordPageSizing = installWordPageSizing($['word-sheet'], $.stage)
 const wordInk = installWordInk({sheet:$['word-sheet'], toolbar:$['word-tools'], get:()=>current, request, editId, status, fail,
   pending:async()=>{document.activeElement?.blur();flushWord();await pendingEdit}, refresh:async(updated,defer)=>{localSequence++;if(updated&&current?.id===updated.id){current=updated;layout()}revision=-1;if(!defer)await renderWord()}, undoSaved:()=>edit({kind:'history-undo'}), sizing:wordPageSizing})
-installDocumentGestures({stage:$.stage,sheet:$['word-sheet'],isActive:()=>Boolean(current?.lines),canPan:()=>drawingSettings.stylusOnly||!$['word-sheet'].classList.contains('word-drawing'),cancelStroke:()=>wordInk.cancelStroke(),getZoom:wordPageSizing.getZoom,setZoom:wordPageSizing.setZoom,render:()=>wordPageSizing.fit()})
+installDocumentGestures({stage:$.stage,sheet:$['word-sheet'],isActive:()=>Boolean(current?.lines)&&$.stage.dataset.filterPrint!=='true',canPan:()=>drawingSettings.stylusOnly||!$['word-sheet'].classList.contains('word-drawing'),cancelStroke:()=>wordInk.cancelStroke(),getZoom:wordPageSizing.getZoom,setZoom:wordPageSizing.setZoom,render:()=>wordPageSizing.fit()})
 installWheelZoom({stage:$.stage,sheet:$['pdf-sheet'],isActive:()=>current?.extension==='pdf'&&!readingView.active&&!!viewport&&!draft,
   getZoom:()=>zoom,setZoom:value=>{zoom=value},render:renderPage,fail})
 installWheelZoom({stage:$.stage,sheet:$['word-sheet'],isActive:()=>Boolean(current?.lines)&&!wordInk.drawing,
   getZoom:wordPageSizing.getZoom,setZoom:wordPageSizing.setZoom,render:wordPageSizing.fit,fail})
-const sharedView = installSharedView({isDrawing:()=>Boolean(draft)||wordInk.drawing,stage:$.stage, get:()=>current, request, editId,
+const sharedView = installSharedView({isDrawing:()=>Boolean(draft)||wordInk.drawing||editingWord,stage:$.stage, get:()=>current, request, editId,
   getReading:()=>readingView.active, pages:()=>readingView.active?readingView.pages():current?.extension==='pdf'?[$['pdf-sheet']]:[...$['word-sheet'].querySelectorAll('section.docx')],
   getPage:()=>page, getZoom:()=>readingView.active?readingView.getZoom():current?.extension==='pdf'?zoom:wordPageSizing.getZoom(),
   async setView(value){if(current?.extension==='pdf'){if(value.reading)return readingView.setView(value);if(readingView.active)await readingView.close();if(!pdf)return false;if(page!==value.page||Math.abs(zoom-value.zoom)>1e-6){page=Math.min(pdf.numPages,value.page);zoom=value.zoom;await renderPage()}}else{if(!$['word-sheet'].querySelector('section.docx'))return false;if(Math.abs(wordPageSizing.getZoom()-value.zoom)>1e-6)wordPageSizing.setZoom(value.zoom)}return true}

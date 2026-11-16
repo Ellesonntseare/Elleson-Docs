@@ -1,3 +1,4 @@
+import {installDocumentGestures} from './document-gestures.mjs'
 import {installFilterGallery} from './filter-gallery.mjs'
 export function installDocumentFilters({get,request,pdfjs,pending,refresh,fail,navigate}){
  const button=document.createElement('button');button.id='document-filters';button.textContent='Scan filters';document.getElementById('toolbar').append(button)
@@ -9,11 +10,16 @@ export function installDocumentFilters({get,request,pdfjs,pending,refresh,fail,n
  comparison.hidden=true
  const heading=dialog.querySelector('h2'),actions=dialog.querySelector('.actions'),collapse=document.createElement('button');collapse.textContent='Collapse';collapse.id='filter-collapse';collapse.setAttribute('aria-expanded','true');actions.prepend(collapse);heading.after(actions,galleryContainer)
  const adjustments=document.createElement('details');adjustments.className='filter-adjustments';const summary=document.createElement('summary');summary.textContent='Adjustments & pages';adjustments.append(summary);for(const label of [...dialog.children].filter(e=>e.tagName==='LABEL'))adjustments.append(label);galleryContainer.after(adjustments)
+ const stage=document.getElementById('stage'),wordSheet=document.getElementById('word-sheet'),printSheet=document.createElement('section');printSheet.className='filter-print-sheet';printSheet.hidden=true;stage.append(printSheet)
+ let printZoom=1,printSize,savedScroll,wordWasHidden
+ const fitPrint=()=>{if(!printSize)return;const scale=Math.min((stage.clientWidth-32)/printSize.width,1)*printZoom;printSheet.style.width=printSize.width*scale+'px';printSheet.style.height=printSize.height*scale+'px'}
+ installDocumentGestures({stage,sheet:printSheet,isActive:()=>!printSheet.hidden,canPan:()=>true,cancelStroke:()=>{},getZoom:()=>printZoom,setZoom:v=>printZoom=v,render:fitPrint})
  let watch
  dialog.showModal=()=>{dialog.hidden=false;document.body.classList.add('document-filter-active');document.querySelectorAll('.mobile-more-sheet[open]').forEach(el=>el.open=false)}
- dialog.close=()=>{dialog.hidden=true;frame.hidden=true;frame.remove();clearInterval(watch);document.body.classList.remove('document-filter-active');dialog.dispatchEvent(new Event('close'))}
+ dialog.close=()=>{if(!printSheet.hidden){printSheet.hidden=true;wordSheet.hidden=wordWasHidden;delete stage.dataset.filterPrint;if(savedScroll){stage.scrollTop=savedScroll.top;stage.scrollLeft=savedScroll.left}}dialog.hidden=true;frame.hidden=true;frame.remove();clearInterval(watch);document.body.classList.remove('document-filter-active');dialog.dispatchEvent(new Event('close'))}
  collapse.onclick=()=>{galleryContainer.hidden=!galleryContainer.hidden;adjustments.hidden=galleryContainer.hidden;collapse.textContent=galleryContainer.hidden?'Expand':'Collapse';collapse.setAttribute('aria-expanded',String(!galleryContainer.hidden));document.body.classList.toggle('filter-dock-collapsed',galleryContainer.hidden)}
- function attachPreview(){const target=source.extension==='pdf'?document.getElementById('pdf-sheet'):document.querySelectorAll('#word-sheet section.docx')[number-1];if(!target)throw Error('Wait for this page to load before filtering.');target.append(frame);frame.hidden=false}
+ function attachPreview(){const target=source.extension==='pdf'?document.getElementById('pdf-sheet'):printSheet;if(!target)throw Error('Wait for this page to load before filtering.');target.append(frame);frame.hidden=false}
+
 
  let source,bytes,pdf,loadingTask,number,sequence=0
  const originals=new Map()
@@ -25,14 +31,16 @@ export function installDocumentFilters({get,request,pdfjs,pending,refresh,fail,n
    if(image.dataset.url)URL.revokeObjectURL(image.dataset.url)
    image.src=image.dataset.url=URL.createObjectURL(blob)
  }
+ const sourceDocumentIsWord=()=>source?.extension!=='pdf'
  async function preview(){
    if(!pdf||dialog.hidden)return
    const own=++sequence,n=number
    try {
      let source=originals.get(number);if(!source){source=await pageImage(n,true);if(own!==sequence)return;originals.set(n,source);while(originals.size>3)originals.delete(originals.keys().next().value)}
      void gallery.update(source,settings()).catch(error=>{dialog.querySelector('[role=status]').textContent=error.message})
-     const result=await (await import('./scan-runtime.mjs')).prepareImage(source,settings())
-     if(own!==sequence)return
+     const result=await (await import('./scan-runtime.mjs')).prepareImage(source,{...settings(),maxDimension:1200})
+     if(own!==sequence||dialog.hidden)return
+     if(sourceDocumentIsWord()){const page=await pdf.getPage(number);printSize=page.getViewport({scale:1});if(printSheet.hidden){wordWasHidden=wordSheet.hidden;savedScroll={top:stage.scrollTop,left:stage.scrollLeft};printZoom=1;wordSheet.hidden=true;printSheet.hidden=false;stage.dataset.filterPrint='true';stage.scrollTop=stage.scrollLeft=0}fitPrint()}
      showImage('#filter-original',source)
      showImage('#filter-preview',result);attachPreview()
    } catch(error){dialog.querySelector('[role=status]').textContent=error.message}

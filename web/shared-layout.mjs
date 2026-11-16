@@ -25,15 +25,15 @@ export async function shareWordLayout({sheet,source,role,request}) {
   if(cachedDocument!==source.id){cachedDocument=source.id;cachedParagraphs.clear()}
   const nextCache=new Map()
   const geometry=pages.map(page=>{const box=page.getBoundingClientRect(),scale=box.width/page.offsetWidth
-   const paragraphs=[...page.querySelectorAll('[data-word-source-index]')].map(p=>{
-    const r=p.getBoundingClientRect(),index=Number(p.dataset.wordSourceIndex)
+   const paragraphs=[...page.querySelectorAll('[data-word-layout-index],[data-word-source-index]')].map(p=>{
+    const r=p.getBoundingClientRect(),layoutIndex=p.dataset.wordLayoutIndex===undefined?undefined:Number(p.dataset.wordLayoutIndex),index=p.dataset.wordSourceIndex===undefined?-(layoutIndex+1):Number(p.dataset.wordSourceIndex)
     const key=[p.outerHTML,r.width/scale,r.height/scale,JSON.stringify(fontStyle(getComputedStyle(p)))].join('|')
     const cached=cachedParagraphs.get(index)
     const characters=cached?.key===key?cached.characters:[]
     const walker=document.createTreeWalker(p,NodeFilter.SHOW_TEXT)
     let node;while(cached?.key!==key&&(node=walker.nextNode())){const s=getComputedStyle(node.parentElement),style=fontStyle(s);for(let i=0;i<node.length;i++){const range=document.createRange();range.setStart(node,i);range.setEnd(node,i+1);const b=range.getBoundingClientRect();characters.push({text:node.textContent[i],x:(b.left-r.left)/scale,y:(b.top-r.top)/scale,width:b.width/scale,height:b.height/scale,font:s.font,style,color:s.color})}}
     nextCache.set(index,{key,characters})
-    return {index,x:(r.left-box.left)/scale,y:(r.top-box.top)/scale,width:r.width/scale,height:r.height/scale,characters:layoutRuns(characters)}
+    return {index,layoutIndex,x:(r.left-box.left)/scale,y:(r.top-box.top)/scale,width:r.width/scale,height:r.height/scale,characters:layoutRuns(characters)}
    });const objects=[...page.querySelectorAll('table,img:not(.word-saved-ink)')].map(el=>{const r=el.getBoundingClientRect();return {x:(r.left-box.left)/scale,y:(r.top-box.top)/scale,width:r.width/scale,height:r.height/scale}});return {width:page.offsetWidth,height:page.offsetHeight,paragraphs,objects}
   })
   cachedParagraphs=nextCache
@@ -47,11 +47,11 @@ export async function shareWordLayout({sheet,source,role,request}) {
   const data=geometry.pages[i],page=pages[i];if(!page)continue
   page.style.width=data.width+'px';page.style.height=data.height+'px';page.style.minHeight=data.height+'px'
   const objects=[...page.querySelectorAll('table,img:not(.word-saved-ink)')];objects.forEach((el,index)=>{const r=data.objects?.[index];if(r){Object.assign(el.style,{position:'absolute',left:r.x+'px',top:r.y+'px',width:r.width+'px',height:r.height+'px',margin:'0'});page.append(el)}})
-  for(const item of data.paragraphs){const p=sheet.querySelector('[data-word-source-index="'+item.index+'"]');if(!p)continue
+  for(const item of data.paragraphs){const p=sheet.querySelector(item.layoutIndex===undefined?'[data-word-source-index="'+item.index+'"]':'[data-word-layout-index="'+item.layoutIndex+'"]');if(!p)continue
    if(p.querySelector('img,svg,canvas'))continue
    const fragment=document.createDocumentFragment();p.replaceChildren();Object.assign(p.style,{position:'absolute',left:item.x+'px',top:item.y+'px',width:item.width+'px',height:item.height+'px',margin:'0',padding:'0'})
    const runs=layoutRuns(item.characters)
-   for(const c of runs){const span=document.createElement('span');span.textContent=c.text;Object.assign(span.style,{position:'absolute',left:c.x+'px',top:c.y+'px',width:c.width+'px',height:c.height+'px',font:c.font,...c.style,color:c.color,whiteSpace:'pre'});fragment.append(span)}
+   for(const c of runs){const span=document.createElement('span');span.textContent=c.text;Object.assign(span.style,{position:'absolute',left:c.x+'px',top:c.y+'px',width:c.width+'px',height:c.height+'px',font:c.font,...c.style,color:c.color,whiteSpace:'pre',textIndent:'0'});fragment.append(span)}
    p.append(fragment)
    p.addEventListener('beforeinput',()=>{
     if(!p.querySelector('span[style]'))return

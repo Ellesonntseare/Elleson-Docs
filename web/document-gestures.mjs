@@ -85,7 +85,7 @@ export function installDocumentGestures({ stage, sheet, cancelStroke, getZoom, s
         sheet.style.transform = ''
         sheet.style.transformOrigin = ''
         sheet.style.willChange = ''
-        if (!touches.size) delete stage.dataset.navigating
+        if (!touches.size) {delete stage.dataset.navigating;stage.dispatchEvent(new Event('document-navigation-end'))}
       })
     }
     if (!touches.size) {

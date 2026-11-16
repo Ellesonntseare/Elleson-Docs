@@ -40,7 +40,7 @@ export async function renderWordPages(bytes, container, styles) {
   }
   let rendered = bytes
   if (ink.length) { zip.file('word/document.xml',new XMLSerializer().serializeToString(xml)); rendered=await zip.generateAsync({type:'uint8array'}) }
-  await window.docx.renderAsync(rendered, container, styles, {inWrapper:true,useBase64URL:true,renderComments:false,renderFootnotes:true})
+  await window.docx.renderAsync(rendered, container, styles, {inWrapper:true,useBase64URL:true,renderComments:false,renderFootnotes:true,breakPages:true,ignoreLastRenderedPageBreak:false})
   // Use the PC's actual font bytes on both connected screens, instead of Android substitutes.
   if(location.hostname!=='appassets.androidplatform.net') {
     const containerParent=container.parentNode,containerNext=container.nextSibling,stylesParent=styles.parentNode,stylesNext=styles.nextSibling
@@ -59,6 +59,7 @@ export async function renderWordPages(bytes, container, styles) {
     if(stylesParent)stylesParent.insertBefore(styles,stylesNext?.parentNode===stylesParent?stylesNext:null)
     if(containerParent)containerParent.insertBefore(container,containerNext?.parentNode===containerParent?containerNext:null)
   }
+  let layoutIndex=0;for(const p of container.querySelectorAll('article p'))p.dataset.wordLayoutIndex=layoutIndex++
   let position = 0
   for (const p of container.querySelectorAll('article p')) {
     const index=lines.findIndex((text,index)=>index>=position&&text===p.textContent)
@@ -73,6 +74,7 @@ export async function renderWordPages(bytes, container, styles) {
     Object.assign(image.style,{left:item.x+'px',top:item.y+'px',width:item.width+'px',height:item.height+'px'})
     page.append(image)
   }
+
 }
 
 export function positionAnchoredInk(sheet) {

@@ -21,7 +21,7 @@ export function installFilterGallery({select,image,beforeImage,container,id}){
  return {sync,async update(blob,options={}){
   sync();const settings=JSON.stringify({...options,filter:undefined,maxDimension:160});if(blob===sourceKey&&settings===previousSettings)return
   sourceKey=blob;previousSettings=settings;const own=++generation,old=urls;urls=[];const {prepareImage}=await import('./scan-runtime.mjs')
-  const before=await prepareImage(blob,{...options,filter:'photo',brightness:0,contrast:0,sharpness:0,whitening:0,maxDimension:1200});if(own!==generation)return
+  const before=await prepareImage(blob,{...options,filter:'photo',brightness:0,contrast:0,sharpness:0,whitening:0,maxDimension:1000});if(own!==generation)return
   const url=URL.createObjectURL(before);urls.push(url);original.src=url;if(beforeImage)beforeImage.src=url;old.forEach(u=>URL.revokeObjectURL(u))
   for(const card of cards){
    const filtered=await prepareImage(blob,{...options,filter:card.dataset.filter,maxDimension:160});if(own!==generation)return

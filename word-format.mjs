@@ -220,7 +220,7 @@ export function insertImage(document, archive, image, Parser, Serializer, fromBy
 }
 
 export function validInkPosition(position) {
-  return position && (position.ink===undefined||validInk(position.ink)) && ['x','y','width','height'].every(key=>typeof position[key]==='number'&&Number.isFinite(position[key])) && (position.paragraphY===undefined||Number.isFinite(position.paragraphY)&&Math.abs(position.paragraphY)<=5000) && position.x>=0 && position.y>=0 && position.width>0 && position.height>0 && position.x+position.width<=5000 && position.y+position.height<=5000
+  return position && (position.ink===undefined||validInk(position.ink)) && ['x','y','width','height'].every(key=>typeof position[key]==='number'&&Number.isFinite(position[key])) && (position.paragraphY===undefined||Number.isFinite(position.paragraphY)&&Math.abs(position.paragraphY)<=5000) && position.x>=0 && position.y>=0 && position.width>0 && position.height>0 && position.x+position.width<=5000 && position.y+position.height<=100000
 }
 
 export function eraseWordInk(bytes,target){return changeWordInk(bytes,target)}

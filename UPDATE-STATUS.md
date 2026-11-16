@@ -1,3 +1,18 @@
+# Elleson Docs 0.4.20
+
+- Restore saved Word page breaks and visible page sections. Transfer geometry for all rendered paragraphs, including paragraphs without an editable source match, and avoid applying text indentation twice on the phone.
+- Leaving Draw immediately restores text editing. Remote navigation pauses while a Word paragraph is focused. Prepare replacement Word layouts before swapping them into view, and clear temporary ink before saved drawing undo.
+- Scanner filter processing uses a worker when supported. Smaller thumbnails and previews reduce work; Word filter previews use the converted PDF page proportions in the main document view instead of stretching over the editable Word page.
+- Includes the bounded visible-area Word ink tiles and removal of persistent text/page outlines from 0.4.19.
+- Physical-phone feel and legacy drawings saved against oversized continuous Word sections still require manual checking; original document bytes are not rewritten by preview pagination.
+
+# Elleson Docs 0.4.19
+
+- Physical phone inspection found a 9,083 px Word page allocating a 1,588 x 18,166 drawing canvas. Word ink now uses bounded visible-area tiles instead of a full-height canvas; stroke coordinates and saved vector data remain in document units.
+- Long-page ink previews and saved drawing placements accept tall Word pages. The previous 5,000 px page limit prevented live previews on the inspected assessment.
+- Removed persistent Word text outlines, PDF text target boxes and green page-tap outlines.
+- Tiled ink tests verify bounded bitmap allocation and preserved coordinates; shared pinch and live Word drawing tests passed. Complex DOCX text overlap remains under investigation.
+
 # Elleson Docs 0.4.18
 
 - Phone drawing: serialize only the coalesced outgoing live preview, rather than every pointer event. Paint the pen tail and enqueue previews once per animation frame.

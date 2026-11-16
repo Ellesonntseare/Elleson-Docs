@@ -84,7 +84,7 @@ export function installMobileShell({get,stage,getPage,readingView}) {
   const isPdf=()=>get()?.extension==='pdf'
   const mode=name=>$(isPdf()?'pdf-tools':'word-tools').querySelector('[data-mode="'+name+'"]')
   const wordDrawing=()=>$('word-draw').getAttribute('aria-pressed')==='true'
-  const stopWordDrawing=()=>{if(wordDrawing())$('word-draw').click()}
+  const stopWordDrawing=()=>document.dispatchEvent(new Event('word-stop-drawing'))
   const read=button('Read',()=>{
     stopWordDrawing()
     mode('read').click()
