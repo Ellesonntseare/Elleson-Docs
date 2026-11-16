@@ -1,3 +1,8 @@
+# Elleson Docs 0.4.13
+
+- Connected Word text is positioned in one pass instead of exposing a partially rearranged paragraph every frame. Glyph measurements and corrections are batched to reduce repeated layout work.
+- Verified shared glyph placement, Word editing and ink, standalone Word use, and PDF/Word pinch in five focused checks. Physical Android timing remains unverified.
+
 # Elleson Docs 0.4.12
 
 - Recovery Restore is disabled until the selected preview completes. Stale PDF previews are disposed, and preview navigation is serialized and bounded to existing pages.

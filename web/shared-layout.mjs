@@ -27,6 +27,7 @@ export async function shareWordLayout({sheet,source,role,request}) {
  let geometry
  for(let attempt=0;attempt<20;attempt++){const response=await request(url);geometry=await response.json();if(geometry)break;await new Promise(r=>setTimeout(r,150))}
  if(!geometry)return
+ const glyphs=[]
  for(let i=0;i<geometry.pages.length;i++){
   const data=geometry.pages[i],page=pages[i];if(!page)continue
   page.style.width=data.width+'px';page.style.height=data.height+'px';page.style.minHeight=data.height+'px'
@@ -44,12 +45,21 @@ export async function shareWordLayout({sheet,source,role,request}) {
     if(p.firstChild)selection.setBaseAndExtent(p.firstChild,Math.min(anchor,p.textContent.length),p.firstChild,Math.min(focus,p.textContent.length))
    },{once:true})
    page.append(p)
-   const scale=page.getBoundingClientRect().width/data.width
-   const corrections=[...p.children].map((span,index)=>{const c=item.characters[index],range=document.createRange();range.selectNodeContents(span);const glyph=range.getBoundingClientRect(),box=span.getBoundingClientRect();return {span,top:c.y-(glyph.top-box.top)/scale,factor:glyph.width>0&&c.width>0?c.width*scale/glyph.width:1}})
-   for(const {span,top,factor} of corrections){span.style.top=top+'px';span.style.transformOrigin='left top';span.style.transform='scaleX('+factor+')'}
-   await new Promise(resolve=>requestAnimationFrame(resolve))
+   glyphs.push({p,page,data,item})
   }
  }
+ // Position the entire document before measuring glyphs. Yielding after each
+ // paragraph exposed intermediate layouts, making the phone text fill upward.
+ const corrections=[]
+ for(const {p,page,data,item} of glyphs){
+   const scale=page.getBoundingClientRect().width/data.width
+   for(const [index,span] of [...p.children].entries()){
+     const c=item.characters[index],range=document.createRange();range.selectNodeContents(span)
+     const glyph=range.getBoundingClientRect(),box=span.getBoundingClientRect()
+     corrections.push({span,top:c.y-(glyph.top-box.top)/scale,factor:glyph.width>0&&c.width>0?c.width*scale/glyph.width:1})
+   }
+ }
+ for(const {span,top,factor} of corrections){span.style.top=top+'px';span.style.transformOrigin='left top';span.style.transform='scaleX('+factor+')'}
  for(const page of pages){page.style.contentVisibility='auto';page.style.containIntrinsicSize=page.offsetWidth+'px '+page.offsetHeight+'px'}
  sheet.dataset.sharedLayout=String(source.contentVersion)
 }
