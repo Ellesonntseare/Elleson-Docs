@@ -1,3 +1,11 @@
+# Elleson Docs 0.4.12
+
+- Recovery Restore is disabled until the selected preview completes. Stale PDF previews are disposed, and preview navigation is serialized and bounded to existing pages.
+- Drawing workspace colour, thickness and smoothing now share the active pen controls. Signature thickness supports custom pen sizes too.
+- Starting a two-finger navigation gesture cancels the pending shape or selection gesture.
+- Drawing and page tools distinguish confirmed changes from queued offline changes and rejected edits; rejected shapes never report success.
+- Validation: 11 workspace, signing and shared-view checks passed. A focused recovery-delay, rapid-navigation and rejected-drawing check passed. Android build signature and alignment verified. Physical Android verification remains outstanding.
+
 # Elleson Docs 0.4.11
 
 - Multi-page scanner: capture or add photos from the gallery, review thumbnails, retake pages, drag to reorder and save one PDF. Scan drafts recover after closing the app.

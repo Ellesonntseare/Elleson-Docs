@@ -14,6 +14,12 @@ export function installDrawingSuite(app,hub){
  const $=id=>document.getElementById(id),safe=fn=>()=>Promise.resolve().then(fn).catch(app.fail)
  const panel=document.createElement('dialog');panel.id='drawing-workspace';panel.className='document-suite';panel.innerHTML='<h2>Drawing tools</h2><p>Select several drawings with a rectangle, or drag to add a shape.</p><div class="suite-actions" data-tools></div><label>Colour <input type="color" value="#185adb" aria-label="Drawing selection colour"></label><label>Pen size <input type="number" min="0.25" max="30" step="0.25" value="2" aria-label="Drawing selection pen size"></label><div class="suite-actions" data-edits></div><p role="status"></p><button data-close>Close</button>';document.body.append(panel)
  const tools=panel.querySelector('[data-tools]'),edits=panel.querySelector('[data-edits]'),message=panel.querySelector('[role=status]'),color=panel.querySelector('input[type=color]'),width=panel.querySelector('input[type=number]')
+ const sharedColor=$('ink-color'),sharedWidth=$('ink-width')
+ function syncSettings(){color.value=sharedColor.value;width.value=sharedWidth.value}
+ const smoothing=document.createElement('label');smoothing.textContent='Smoothing ';const smooth=document.createElement('input');smooth.type='range';smooth.min=0;smooth.max=1;smooth.step=.1;smooth.value=$('ink-smoothing').value;smooth.setAttribute('aria-label','Shared drawing smoothing');smoothing.append(smooth);width.closest('label').after(smoothing);smooth.oninput=()=>{$('ink-smoothing').value=smooth.value;$('ink-smoothing').dispatchEvent(new Event('input',{bubbles:true}))};$('ink-smoothing').addEventListener('input',()=>{smooth.value=$('ink-smoothing').value})
+ syncSettings();sharedColor.addEventListener('input',syncSettings);sharedWidth.addEventListener('input',syncSettings)
+ color.addEventListener('input',()=>{sharedColor.value=color.value;sharedColor.dispatchEvent(new Event('input',{bubbles:true}))})
+ width.addEventListener('input',()=>{const value=Number(width.value);if(!Number.isFinite(value)||value<.25||value>30)return;if(![...sharedWidth.options].some(o=>o.value===String(value)))sharedWidth.add(new Option(String(value),String(value)));sharedWidth.value=String(value);sharedWidth.dispatchEvent(new Event('input',{bubbles:true}))})
  let action=null,gesture=null,selection=[],selectedDoc,selectedVersion,selectedPage,selectedWordPage,wordSelection=[],overlay
  function button(label,fn,parent){return hub.button(label,fn,parent)}
  async function begin(mode){if(!app.get())throw Error('Open a document first.');action=mode;selection=[];wordSelection=[];app.setMode(app.get().extension==='pdf'?'select':'read');if(app.get().lines)await app.renderWord();panel.close();app.status(mode==='select'?'Drag a rectangle around drawings. Tap Drawing tools to edit the selection.':'Drag on the document to draw a '+mode+'.');$('stage').classList.add('suite-drawing-active')}
@@ -34,9 +40,9 @@ export function installDrawingSuite(app,hub){
        items.push(entry)
      }
      await app.request('/api/word-ink-batch/'+doc.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:app.editId(),version:doc.contentVersion,action:type,items})});await app.refresh();wordSelection=[]
-   }else{await app.edit({kind:'transform',targets:selection,target:selection[0],action:type,...extra})}
+   }else{const result=await app.edit({kind:'transform',targets:selection,target:selection[0],action:type,...extra});if(!result)throw Error('Drawing change was not saved. Select the drawings again and retry.');if(result==='queued'){message.textContent='Drawing change retained on this device until the connection returns.';return false}}
    if(type==='delete'||type==='duplicate'){selection=[];wordSelection=[];overlay?.remove()}
-   message.textContent=type==='delete'?'Drawings deleted. Undo can restore them.':'Drawing changes saved.'
+   message.textContent=type==='delete'?'Drawings deleted. Undo can restore them.':'Drawing changes saved.';return true
  }
  button('Apply colour',()=>transform('apply',{color:color.value}),edits)
  button('Apply pen size',()=>{if(wordSelection.length)throw Error('Saved Word ink is an image. Resize the selection to change its apparent thickness.');return transform('apply',{width:Number(width.value)})},edits)
@@ -69,7 +75,7 @@ export function installDrawingSuite(app,hub){
    if(!gesture||gesture.id!==event.pointerId)return
    const g=gesture;gesture=null;event.preventDefault();event.stopImmediatePropagation();const end=coordinates(event,g.sheet,g.word)
    if(app.get()?.id!==g.document){overlay?.remove();return}
-   if(g.mode==='move'){void transform('apply',{dx:end[0]-g.start[0],dy:end[1]-g.start[1]}).then(()=>{overlay?.remove();action='select';app.status('Drawings moved. Undo restores their previous position.')}).catch(app.fail)}else if(g.mode==='select'){
+   if(g.mode==='move'){void transform('apply',{dx:end[0]-g.start[0],dy:end[1]-g.start[1]}).then(saved=>{overlay?.remove();action='select';if(saved)app.status('Drawings moved. Undo restores their previous position.')}).catch(app.fail)}else if(g.mode==='select'){
      const rect=drawingBounds([{points:[g.start,end]}]);selectedDoc=g.document;selectedVersion=app.get().contentVersion;selectedPage=app.page()
      if(g.word){selectedWordPage=g.sheet;wordSelection=[...g.sheet.querySelectorAll('.word-saved-ink')].filter(image=>{const r={x:parseFloat(image.style.left),y:parseFloat(image.style.top),width:parseFloat(image.style.width),height:parseFloat(image.style.height)};return r.x+r.width>=rect[0]&&r.y+r.height>=rect[1]&&r.x<=rect[2]&&r.y<=rect[3]}).map(image=>({image,target:image.dataset.inkTarget,position:{x:parseFloat(image.style.left),y:parseFloat(image.style.top),width:parseFloat(image.style.width),height:parseFloat(image.style.height),...(image.dataset.inkParagraphY===undefined?{}:{paragraphY:Number(image.dataset.inkParagraphY)})}}))}
      else{selection=app.get().marks.filter(m=>m.kind==='ink'&&m.page===selectedPage).filter(m=>{const r=drawingBounds([m]);return r[2]>=rect[0]&&r[3]>=rect[1]&&r[0]<=rect[2]&&r[1]<=rect[3]}).map(m=>m.id)}
@@ -77,7 +83,7 @@ export function installDrawingSuite(app,hub){
    }else if(Math.hypot(end[0]-g.start[0],end[1]-g.start[1])>2){
      const strokes=shapeStrokes(g.mode,g.start,end)
      void(async()=>{
-       if(!g.word)await app.edit({kind:'signature',page:app.page(),strokes,color:color.value,width:Number(width.value)})
+       if(!g.word){const result=await app.edit({kind:'signature',page:app.page(),strokes,color:color.value,width:Number(width.value)});if(!result)throw Error('Shape was not saved. Please retry.');if(result==='queued'){overlay?.remove();return}}
        else{
          await app.pending();const doc=app.get();if(doc.id!==g.document)throw Error('The document changed.')
          const bounds=drawingBounds(strokes.map(points=>({points}))),pad=(g.mode==='highlighter'?12:Number(width.value))+2,x=Math.max(0,bounds[0]-pad),y=Math.max(0,bounds[1]-pad),w=Math.min(g.sheet.offsetWidth-x,bounds[2]-x+pad),h=Math.min(g.sheet.offsetHeight-y,bounds[3]-y+pad),canvas=document.createElement('canvas');canvas.width=Math.ceil(w*2);canvas.height=Math.ceil(h*2);const ctx=canvas.getContext('2d');ctx.scale(2,2);ctx.globalAlpha=g.mode==='highlighter'?.25:1;ctx.strokeStyle=color.value;ctx.lineWidth=g.mode==='highlighter'?12:Number(width.value);ctx.lineJoin=ctx.lineCap='round';for(const stroke of strokes){ctx.beginPath();stroke.forEach(([a,b],i)=>i?ctx.lineTo(a-x,b-y):ctx.moveTo(a-x,b-y));ctx.stroke()}
@@ -89,6 +95,7 @@ export function installDrawingSuite(app,hub){
      })().catch(app.fail)
    }else overlay?.remove()
  },true)
+ $('stage').addEventListener('document-navigation-start',()=>{gesture=null;overlay?.remove()})
  document.addEventListener('click',event=>{if(event.target.closest('[data-mode],#word-draw')){action=null;gesture=null;overlay?.remove();$('stage').classList.remove('suite-drawing-active')}},true)
  document.addEventListener('keydown',event=>{if(event.key==='Escape'){action=null;gesture=null;overlay?.remove();$('stage').classList.remove('suite-drawing-active')}})
  return {stop(){action=null;gesture=null;overlay?.remove();$('stage').classList.remove('suite-drawing-active')}}

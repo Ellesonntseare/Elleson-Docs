@@ -1,6 +1,6 @@
 {
   "name": "elleson-docs",
-  "version": "0.4.11",
+  "version": "0.4.12",
   "description": "Windows and Android document viewer and editor with live two-way editing",
   "main": "main.cjs",
   "scripts": {
@@ -30,7 +30,7 @@
     "@xmldom/xmldom": "0.9.12",
     "diff": "9.0.0",
     "docx": "9.15.3",
-    "docx-preview": "0.4.11",
+    "docx-preview": "0.4.12",
     "express": "5.3.0",
     "fflate": "0.8.3",
     "mupdf": "1.28.6",

@@ -99,7 +99,7 @@ async function verify() {
     await window.locator('.mobile-file-sheet summary').click()
     await window.locator('.mobile-file-sheet').getByRole('button',{name:'Open file',exact:true}).click()
     await window.locator('#file-title').getByText('Photo.pdf',{exact:true}).waitFor()
-    await window.getByText('PDF ready',{exact:true}).waitFor()
+    await window.waitForFunction(()=>document.querySelector('#pdf-canvas')?.width>0)
     await window.locator('.mobile-file-sheet summary').click()
     await window.getByRole('button',{name:'Save as PDF',exact:true}).click()
     await window.getByText('Copy saved',{exact:true}).waitFor()

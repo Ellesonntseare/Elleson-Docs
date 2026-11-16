@@ -27,6 +27,7 @@ export function installDocumentGestures({ stage, sheet, cancelStroke, getZoom, s
     if (touches.size < 2) return
     if (pendingPan) paint()
     pan = null
+    stage.dispatchEvent(new Event('document-navigation-start'))
     cancelStroke()
     if (!gesture) {
       const point = measure(), bounds = sheet.getBoundingClientRect()

@@ -55,7 +55,7 @@ test('phone workspace combines files, organises pages, draws shapes and previews
  await screen.locator('#file-title').getByText('Combined document.pdf',{exact:true}).waitFor();assert.equal((await state(host)).pages,4)
  await clickTool(screen,screen.locator('#suite-pages'));await screen.locator('#page-workspace .suite-page-card').nth(0).getByRole('button',{name:'Duplicate',exact:true}).click();await screen.locator('#page-workspace .suite-page-card').nth(0).getByRole('button',{name:'Rotate',exact:true}).click();await screen.getByRole('button',{name:'Apply page changes',exact:true}).click();await screen.waitForFunction(()=>document.querySelector('#status').textContent.startsWith('Page changes saved'))
  assert.equal((await state(host)).pages,5)
- await clickTool(screen,screen.locator('#suite-drawing'));await screen.locator('#drawing-workspace').getByRole('button',{name:'Rectangle',exact:true}).click()
+ await clickTool(screen,screen.locator('#suite-drawing'));await screen.getByLabel('Drawing selection colour',{exact:true}).fill('#167642');assert.equal(await screen.locator('#ink-color').inputValue(),'#167642');await screen.getByLabel('Drawing selection pen size',{exact:true}).fill('4');assert.equal(await screen.locator('#ink-width').inputValue(),'4');await screen.locator('#drawing-workspace').getByRole('button',{name:'Rectangle',exact:true}).click()
  const r=await screen.locator('#pdf-sheet').boundingBox();await screen.mouse.move(r.x+40,r.y+40);await screen.mouse.down();await screen.mouse.move(r.x+100,r.y+100);await screen.mouse.up();await screen.getByText('Shape saved. Undo removes it.',{exact:true}).waitFor()
  let doc=await state(host);assert.ok(doc.marks.some(m=>m.kind==='ink'&&m.points.length===5))
  await screen.keyboard.press('Escape');await clickTool(screen,screen.locator('#suite-drawing'));await screen.locator('#drawing-workspace').getByRole('button',{name:'Select drawings',exact:true}).click()
@@ -127,4 +127,23 @@ test('restoring the oldest checkpoint succeeds when retaining only one version',
    const retained=await(await fetch(host.address+'/api/library/'+restored.libraryId+'/versions',{headers:headers(host)})).json();assert.equal(retained.length,1)
    const saved=await PDFDocument.load(await(await fetch(host.address+'/api/library/'+restored.libraryId+'/preview/'+retained[0].id,{headers:headers(host)})).arrayBuffer());assert.equal(saved.getForm().getTextField('Name').getText(),'Keep newer work')
  }finally{await close(host)}
+})
+
+test('recovery waits for previews and rejected drawing edits never report saved',{timeout:60000},async()=>{
+ const host=await start(),browser=await chromium.launch({channel:'msedge'})
+ try{
+  await host.open('Safety.pdf',Buffer.from(await fixture()));const doc=await state(host)
+  await fetch(host.address+'/api/checkpoint/'+doc.id,{method:'POST',headers:{...headers(host),'Content-Type':'application/json'},body:'{}'})
+  const screen=await browser.newPage({viewport:{width:390,height:844},isMobile:true}),errors=[];screen.on('pageerror',e=>errors.push(e.message));await screen.goto(host.address+'/#owner='+host.owner);await screen.getByText('PDF ready',{exact:true}).waitFor()
+  await clickTool(screen,screen.locator('#suite-recovery'));await screen.locator('.suite-history-list button').first().click();const restore=screen.getByRole('button',{name:'Restore selected version',exact:true});await restore.waitFor();await screen.waitForFunction(()=>!document.querySelector('#recovery-workspace button').disabled)
+  await screen.locator('.suite-version-preview canvas').waitFor();await screen.waitForFunction(()=>document.querySelector('#recovery-workspace [role=status]').textContent.startsWith('Preview:'))
+  let release;const gate=new Promise(resolve=>release=resolve)
+  await screen.route('**/api/library/*/preview/*',async route=>{await gate;await route.continue()})
+  await screen.locator('.suite-history-list button').last().click();assert.equal(await restore.isDisabled(),true);release();await screen.waitForFunction(()=>document.querySelector('#recovery-workspace [role=status]').textContent.startsWith('Preview:'))
+  await screen.getByRole('button',{name:'Next preview page',exact:true}).evaluate(button=>{for(let i=0;i<10;i++)button.click()});await screen.getByText('Page 2 / 3',{exact:true}).waitFor();assert.deepEqual(errors,[])
+  await screen.locator('#recovery-workspace').getByRole('button',{name:'Close',exact:true}).click();await clickTool(screen,screen.locator('#suite-drawing'));await screen.locator('#drawing-workspace').getByRole('button',{name:'Rectangle',exact:true}).click()
+  await screen.route('**/api/edit/*',route=>route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({error:'Document changed during drawing.'})}))
+  const box=await screen.locator('#pdf-sheet').boundingBox();await screen.mouse.move(box.x+30,box.y+30);await screen.mouse.down();await screen.mouse.move(box.x+100,box.y+100);await screen.mouse.up();await screen.waitForFunction(()=>document.querySelector('#status').textContent==='Shape was not saved. Please retry.');assert.equal((await state(host)).marks.length,0)
+  assert.deepEqual(errors,[])
+ }finally{await browser.close();await close(host)}
 })

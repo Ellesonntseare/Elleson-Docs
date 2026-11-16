@@ -20,7 +20,7 @@ export function installDocumentSuite(app){
     if(!plan.length)throw Error('Keep at least one page.')
     await app.pending();const doc=requirePdf();if(doc.id!==pageDoc.id||doc.contentVersion!==pageDoc.contentVersion)throw Error('The document changed. Close and reopen Pages before applying.')
     apply.disabled=true
-    try{const ok=await app.edit({kind:'pages',action:'plan',pages:plan.map(({index,rotation})=>({index,rotation})),version:pageDoc.contentVersion});if(ok){organiser.close();app.status('Page changes saved. Undo restores the previous arrangement.')}}finally{apply.disabled=false}
+    try{const ok=await app.edit({kind:'pages',action:'plan',pages:plan.map(({index,rotation})=>({index,rotation})),version:pageDoc.contentVersion});if(ok){organiser.close();if(ok!=='queued')app.status('Page changes saved. Undo restores the previous arrangement.')}}finally{apply.disabled=false}
   },pageActions)
   button('Close',()=>organiser.close(),pageActions)
   let plan=[],pagePdf,pageDoc,paintSequence=0
@@ -96,19 +96,20 @@ export function installDocumentSuite(app){
   let historyDoc,versions=[],selectedVersion,historyPdf,historyPage=0,historySequence=0
   async function historyRows(){versions=await(await app.request('/api/library/'+historyDoc.libraryId+'/versions')).json();entries.replaceChildren(...versions.map((v,index)=>button((index===0?'Latest · ':'')+new Date(v.date).toLocaleString()+' · '+v.filename,()=>showVersion(v),null)));for(const [index,node]of [...entries.children].entries())node.onclick=safe(()=>showVersion(versions[index]));historyStatus.textContent=versions.length+' saved checkpoints. Preview a version before restoring it.'}
   async function showVersion(v){
-    const sequence=++historySequence;selectedVersion=v;historyPdf?.dispose();historyPdf=null;preview.replaceChildren();historyStatus.textContent='Loading saved version…'
+    const sequence=++historySequence;selectedVersion=null;restore.disabled=true;historyPdf?.dispose();historyPdf=null;preview.replaceChildren();historyStatus.textContent='Loading saved version…'
     const bytes=await(await app.request('/api/library/'+historyDoc.libraryId+'/preview/'+v.id)).arrayBuffer();if(sequence!==historySequence)return
     if(/\.pdf$/i.test(v.filename)){
-      historyPdf=await loadPdf(bytes);historyPage=0
+      const loaded=await loadPdf(bytes);if(sequence!==historySequence){loaded.dispose();return}historyPdf=loaded;historyPage=0
       const row=actions(preview),canvas=document.createElement('canvas'),label=document.createElement('span')
-      const draw=async()=>{await paint(historyPdf,historyPage,canvas,Math.min(650,recovery.clientWidth-60));label.textContent='Page '+(historyPage+1)+' / '+historyPdf.numPages;previous.disabled=historyPage===0;next.disabled=historyPage===historyPdf.numPages-1}
-      const previous=button('Previous preview page',async()=>{historyPage--;await draw()},row),next=button('Next preview page',async()=>{historyPage++;await draw()},row);row.append(label);preview.append(canvas);await draw()
+      let busy=false
+      const draw=async(delta=0)=>{if(busy||sequence!==historySequence)return;busy=true;previous.disabled=next.disabled=true;const number=Math.max(0,Math.min(loaded.numPages-1,historyPage+delta));try{await paint(loaded,number,canvas,Math.min(650,recovery.clientWidth-60));if(sequence===historySequence){historyPage=number;label.textContent='Page '+(number+1)+' / '+loaded.numPages}}finally{busy=false;if(sequence===historySequence){previous.disabled=historyPage===0;next.disabled=historyPage===loaded.numPages-1}}}
+      const previous=button('Previous preview page',()=>draw(-1),row),next=button('Next preview page',()=>draw(1),row);row.append(label);preview.append(canvas);await draw()
     }else if(/\.docx$/i.test(v.filename)){const styles=document.createElement('div'),body=document.createElement('div');preview.append(styles,body);await renderWordPages(bytes,body,styles)}else preview.textContent='Visual preview is available for PDF and DOCX. Open this version to view legacy Word files.'
-    if(sequence===historySequence){historyStatus.textContent='Preview: '+v.filename+' · '+new Date(v.date).toLocaleString();restore.disabled=false}
+    if(sequence===historySequence){selectedVersion=v;historyStatus.textContent='Preview: '+v.filename+' · '+new Date(v.date).toLocaleString();restore.disabled=false}
   }
   button('Create checkpoint',async()=>{await app.pending();if(app.get()?.id!==historyDoc.id)throw Error('The active document changed. Reopen Recovery history.');await app.request('/api/checkpoint/'+historyDoc.id,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});await app.refresh();historyDoc={...app.get()};await historyRows();app.status('Recovery checkpoint saved.')},historyActions)
   const restore=button('Restore selected version',async()=>{
-    if(!selectedVersion)return
+    if(!selectedVersion||restore.disabled)return
     await app.pending();if(app.get()?.id!==historyDoc.id)throw Error('The active document changed. Reopen Recovery history.')
     // Save current work first so restoring an older file never discards today's edits.
     await app.request('/api/restore-checkpoint/'+historyDoc.id,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:selectedVersion.id})})

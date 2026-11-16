@@ -1511,6 +1511,7 @@ $.signature.addEventListener("click", () => {
   $["saved-signatures"].replaceChildren(new Option("New signature", ""), ...savedSignatures.map((item, index) => new Option(item.name, index)))
   $["signature-dialog"].showModal()
   $['signature-color'].value=$['ink-color'].value
+  if(![...$['signature-thickness'].options].some(option=>option.value===$['ink-width'].value))$['signature-thickness'].add(new Option($['ink-width'].value,$['ink-width'].value))
   $['signature-thickness'].value=$['ink-width'].value
   drawSignature()
 })
@@ -1655,7 +1656,8 @@ installMobileShell({get:()=>current,stage:$.stage,getPage:()=>page,readingView})
 
 installDocumentContext({get:()=>current,go,closeTab:id=>void closeTab(id).catch(fail),tools})
 
-const suiteApp={get:()=>current,role:()=>role,viewport:()=>viewport,page:()=>page,request,edit,editId,setMode,go,status,fail,pdfjs,renderWord,
+async function suiteEdit(change){const id=change.id||editId();const ok=await edit({...change,id});return ok&&queuedChanges.some(item=>item.change.id===id)?'queued':ok}
+const suiteApp={get:()=>current,role:()=>role,viewport:()=>viewport,page:()=>page,request,edit:suiteEdit,editId,setMode,go,status,fail,pdfjs,renderWord,
  pending:async()=>{document.activeElement?.blur();flushWord();await pendingEdit},
  refresh:async()=>{revision=-1;await refresh()},
  open:async(name,bytes)=>{document.activeElement?.blur();flushWord();await pendingEdit;await request('/api/open',{method:'POST',headers:{'Content-Type':'application/octet-stream','X-Filename':encodeURIComponent(name)},body:bytes});revision=-1;await refresh()}}
