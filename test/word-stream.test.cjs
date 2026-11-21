@@ -3,7 +3,7 @@ test('Word drawing streams before pen-up, automatically joins the shared DOCX an
   const host=await start(),browser=await chromium.launch({channel:'msedge'})
   try{await host.open('One shared document.docx',await Packer.toBuffer(new Document({sections:[{children:[new Paragraph('Sign this document')]}]})))
     const pc=await browser.newPage(),phone=await browser.newPage({viewport:{width:390,height:844}})
-    await pc.goto(host.address+'/#owner='+host.owner);await phone.goto(host.address)
+    await pc.goto(host.address+'/#owner='+host.owner);await require('./menu-helper.cjs').connectPhone(pc, phone, host.address)
     await pc.locator('.word-ink-layer').waitFor({state:'attached'});await phone.locator('.word-ink-layer').waitFor({state:'attached'})
     await phone.locator('.mobile-mode-dock').getByRole('button',{name:'Draw',exact:true}).click()
     const bounds=await phone.locator('.word-ink-layer').first().boundingBox()

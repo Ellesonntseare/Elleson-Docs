@@ -16,7 +16,7 @@ export function installWorkState({get,mode}){
   const names={pen:'Draw / Sign',highlight:'Highlight',erase:'Erase',read:'Move / Read',edit:'Edit text',word:'Edit text',text:'Add text',select:'Select drawing',signature:'Place signature',review:'Review'}
   badge.textContent=(erase&&(word||active==='pen')?'Erase':names[active]||'Document')+((active==='pen'||word)&&!erase?' · '+document.getElementById('ink-width').value:'')
   badge.dataset.writing=String(word||['pen','highlight','signature'].includes(active));badge.setAttribute('aria-label','Writing tools');badge.setAttribute('aria-description','Current tool: '+badge.textContent)
-  const inkPending=document.getElementById('word-sheet').dataset.pendingInk==='true';const text=document.getElementById('save-state').textContent;saved.textContent=inkPending?'Drawing retained · pending sync':text.includes('waiting')?'Saved here · pending sync':text.includes('unavailable')?'Save needs attention':text.includes('unsaved')?(location.hostname==='appassets.androidplatform.net'?'Saved on phone':'Synced · file not saved'):'File saved'
+  const inkPending=document.getElementById('word-sheet').dataset.pendingInk==='true';const text=document.getElementById('save-state').textContent;saved.textContent=inkPending?'Drawing retained · pending sync':text.includes('waiting')?'Saved here · pending sync':text.includes('unavailable')?'Save needs attention':text.includes('unsaved')?(location.hostname==='appassets.androidplatform.net'?'Saved on phone':'Synced · file not saved'):text || 'File saved'
   saved.dataset.pending=String(inkPending||text.includes('waiting')||text.includes('unavailable'))
  }
  new MutationObserver(update).observe(document.getElementById('save-state'),{childList:true,characterData:true,subtree:true})

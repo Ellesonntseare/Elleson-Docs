@@ -38,4 +38,9 @@ async function waitForAsync(page, predicate, argument, timeout = 30000) {
   }
   throw new Error('Timed out waiting for the asynchronous state check: '+predicate.toString())
 }
-module.exports = { clickTool, waitForAsync, showMobileControls }
+async function connectPhone(pc, phone, address) {
+  await phone.goto(address)
+  await pc.locator("#approve-phone-dialog[open] #approve-phone").click()
+  await phone.waitForFunction(() => Boolean(sessionStorage.getItem("elleson-session")))
+}
+module.exports = { clickTool, waitForAsync, showMobileControls, connectPhone }

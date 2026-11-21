@@ -1,6 +1,6 @@
-export function installConflictHistory({get,apply,fail}){
+export function installConflictHistory({get,apply,fail,storage=localStorage}){
  const key='elleson-conflicting-text-v1';let records=[]
- try{records=JSON.parse(localStorage.getItem(key)||'[]');if(!Array.isArray(records))records=[]}catch{}
+ try{records=JSON.parse(storage.getItem(key)||'[]');if(!Array.isArray(records))records=[]}catch{}
  const dialog=document.createElement('dialog');dialog.id='text-conflicts';dialog.innerHTML='<h2>Conflicting edits</h2><p>Both versions are retained here. Selecting a version applies it only if the document has not changed again.</p><div data-list></div><button data-close>Close</button>';document.body.append(dialog)
  dialog.querySelector('[data-close]').onclick=()=>dialog.close()
  const button=document.createElement('button');button.id='review-text-conflicts';button.textContent='Review conflicting text';document.getElementById('history-actions').append(button)
@@ -25,6 +25,6 @@ export function installConflictHistory({get,apply,fail}){
   const record={document,filename:get()?.filename||'Document',change:{...change},local:change.value,remote,time:Date.now()}
   if(!records.some(item=>item.change.id===change.id&&JSON.stringify(item.remote)===JSON.stringify(remote)))records.push(record)
   // Keep all unresolved text; never evict an older conflict to make space.
-  try{localStorage.setItem(key,JSON.stringify(records))}catch{fail(Error('Conflicting versions are available in Review conflicting text for this session. Device storage is full; copy them before closing.'))}
+  try{storage.setItem(key,JSON.stringify(records))}catch{fail(Error('Conflicting versions are available in Review conflicting text for this session. Device storage is full; copy them before closing.'))}
  }}
 }

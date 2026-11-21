@@ -42,7 +42,7 @@ class DocumentLibrary {
       const previous = this.records.find(record => record.id === id)
       const version = { id: crypto.randomUUID(), date: Date.now(), size: bytes.length, filename }
       const record = {
-        id, filename, pinned: previous?.pinned || false, updated: Date.now(),
+        id, filename, pinned: previous?.pinned || false, tags: previous?.tags || [], updated: Date.now(),
         versions: [...previous?.versions || [], version]
       }
       const records = [...this.records.filter(record => record.id !== id), record]
@@ -59,9 +59,12 @@ class DocumentLibrary {
     return operation
   }
   async pin(id, pinned) {
+    return this.updateDetails(id, { pinned })
+  }
+  async updateDetails(id, details) {
     const operation = this.queue.then(async () => {
       if (!this.records.some(record => record.id === id)) throw new Error("Document not found.")
-      const records = this.records.map(record => record.id === id ? { ...record, pinned } : record)
+      const records = this.records.map(record => record.id === id ? { ...record, ...details } : record)
       await this.writeIndex(records)
       this.records = records
     })

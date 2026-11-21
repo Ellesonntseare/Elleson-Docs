@@ -29,3 +29,16 @@
 #quick-pen{position:fixed;bottom:80px;right:16px;z-index:30;background:#f7f6ef;border:1px solid #789686;border-radius:16px;padding:8px;max-width:calc(100vw - 32px);box-shadow:0 4px 20px #0002}#quick-pen[hidden]{display:none}#quick-pen>div{display:flex;gap:6px;align-items:center;flex-wrap:wrap}#quick-pen input[type=color]{width:38px;height:32px}#quick-pen button{min-height:38px}
 #quick-pen{bottom:auto;top:150px;width:180px;max-height:220px;overflow:auto}body:has(.tool-menu[open]) #quick-pen,body.mobile-sheet-open #quick-pen{visibility:hidden}
 #quick-pen{top:auto;bottom:160px;max-height:160px}
+.signature-placement{position:absolute;z-index:18;box-sizing:border-box;outline:2px dashed #167865;touch-action:none;cursor:move;background:#ffffffac}
+.signature-placement canvas{width:100%;height:100%;pointer-events:none}
+.signature-placement .placement-handle{position:absolute;bottom:0;right:0;transform:translate(40%,40%);border-radius:50%;width:30px;height:30px;padding:0;background:#146353;color:white;touch-action:none}
+.placement-controls{position:absolute;bottom:100%;left:0;height:max-content;display:flex;gap:4px}
+.placement-controls button{background:white;color:#174d42;border:1px solid #477c6a;border-radius:7px;min-height:32px}
+.document-delivery{display:grid;gap:4px;padding:8px 12px;color:inherit}
+.modern-interface .document-delivery #save-state{display:block}
+@media(max-width:600px){.modern-interface .mobile-ink-actions{flex-wrap:wrap}}
+#delivery:not([hidden]){position:fixed;top:52px;right:8px;z-index:7;display:inline-flex;align-items:center;gap:6px;background:#f0f8f4;color:#205d46;border:1px solid #b5d0c2;border-radius:8px;padding:3px 8px;font-size:12px}
+#retry-delivery:not([hidden]){min-height:30px;color:inherit}
+/* Commands which require ownership of the host workspace. */
+.collaboration-guest :is(#new-document,#scan,#convert-files,#connect,#library,#save,#save-original,#save-as,#share-as,#rename-document,#print,
+  #history-undo,#history-redo,#organize,#protect-pdf,#document-extras,#suite-privacy,#suite-companion,#recognize) { display: none !important; }

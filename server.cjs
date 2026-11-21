@@ -23,23 +23,44 @@ const downloadMime = {
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 }
 
-async function start(port = 0, recoveryDirectory) {
+async function start(port = 0, recoveryDirectory, onRestore) {
   const { fieldValues, sameValue, validFieldValue, setFieldValue } = await import('./pdf-fields.mjs')
   const {drawPdfInk}=await import('./ink-export.mjs')
   const web = express()
   const owner = token()
   const library = new DocumentLibrary(recoveryDirectory ? path.join(recoveryDirectory, "library") : null)
   await library.load()
+  const { createLibrarySearch, normalizedTags } = await import("./library-search.mjs")
+  const searchLibrary = createLibrarySearch()
   let pairing
   let pairRequest
   let mobile
   let mobileUntil = 0
+  let phoneReceipt
   let lastPhoneSeen = 0
   let document
   const documents = new Map()
+  const { createCollaboration, isLanAddress, mergeParagraph } = require("./collaboration.cjs")
+  const collaborationPath = recoveryDirectory && path.join(recoveryDirectory, "collaborators.json")
+  let savedCollaborators = []
+  if (collaborationPath) {
+    try {
+      const stored = JSON.parse(await fs.readFile(collaborationPath, "utf8"))
+      if (Array.isArray(stored)) savedCollaborators = stored
+    } catch {}
+  }
+  const collaboration = createCollaboration(savedCollaborators, async grants => {
+    if (!collaborationPath) return
+    await fs.mkdir(recoveryDirectory, { recursive: true })
+    await durableWrite(collaborationPath, JSON.stringify(grants))
+  })
+  const guestEdits = new Set(["word", "word-format", "word-tools", "word-table", "field", "ink", "signature", "text", "replace", "review"])
+  const guestReads = new Set(["source", "text", "word-layout", "form-fields", "word-styles", "review"])
   let recoveryWarning = ""
+  const failedTabs = new Map()
   let openSequence = 0
   let revision = 0
+  let restoringWorkspace = Boolean(recoveryDirectory)
   let recognizing = false
   let checkpointQueue = Promise.resolve()
   let editQueue = Promise.resolve()
@@ -52,6 +73,8 @@ async function start(port = 0, recoveryDirectory) {
   const publish=(type,role)=>{
     for(const client of liveClients){
       if(client.role==='phone'&&(client.token!==mobile||mobileUntil<=Date.now())){client.response.end();continue}
+      if (client.role === "guest" && !collaboration.get(client.token)) { client.response.end(); continue }
+      if (client.role === "guest" && type !== "refresh") continue
       if(role&&role===client.role)continue
       const payload=type==='preview'?{type,preview:peerPreview(client.role),previewSequence}:type==='view'?{type,view:sharedView}:{type}
       if(client.response.writableLength>256*1024){client.response.destroy();continue}
@@ -98,21 +121,18 @@ async function start(port = 0, recoveryDirectory) {
     if(!updateDirectory)return response.sendStatus(404)
     response.sendFile(path.join(updateDirectory,'android.apk'))
   })
-  web.post('/api/connect',async(request,response)=>{
-    const address=(request.socket.remoteAddress||'').replace(/^::ffff:/,'')
-    const local=isLoopback(request)||/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(address)
-    if(!local||request.get('X-Elleson-Connect')!=='1')return response.status(403).json({error:'Connect using the same Wi-Fi as the PC.'})
-    if(!mobile||mobileUntil<Date.now()){mobile=token();mobileUntil=Date.now()+30*86400000}
-    lastPhoneSeen=Date.now()
-    if(recoveryDirectory)await durableWrite(path.join(recoveryDirectory,'paired-device.json'),JSON.stringify({token:mobile,until:mobileUntil}))
-    response.json({token:mobile})
+  web.post("/api/collab-join", async (request, response) => {
+    if (!isLanAddress(request.socket.remoteAddress)) return response.sendStatus(403)
+    response.json(await collaboration.join(request.body.invite, request.body.name, id => documents.has(id)))
   })
   web.post("/api/pair-request", (request, response) => {
+    if (!isLanAddress(request.socket.remoteAddress)) return response.sendStatus(403)
     if (pairRequest && pairRequest.until > Date.now()) return response.status(409).json({ error: "Another connection request is pending. Try again shortly." })
     pairRequest = { id: token(), secret: token(), address: request.socket.remoteAddress, until: Date.now() + 120000, approved: false }
     response.json({ id: pairRequest.id, secret: pairRequest.secret })
   })
   web.post("/api/pair-request/status", (request, response) => {
+    if (!isLanAddress(request.socket.remoteAddress)) return response.sendStatus(403)
     if (!pairRequest || pairRequest.until < Date.now() || request.body.id !== pairRequest.id || request.body.secret !== pairRequest.secret) return response.status(410).json({ error: "Connection request expired. Try again." })
     if (!pairRequest.approved) return response.json({ waiting: true })
     const credential = pairRequest.credential; pairRequest = undefined
@@ -120,6 +140,7 @@ async function start(port = 0, recoveryDirectory) {
   })
 
   web.post("/api/pair", async (request, response) => {
+    if (!isLanAddress(request.socket.remoteAddress)) return response.sendStatus(403)
     const supplied = String(request.body?.code ?? "").toUpperCase().trim()
     if (!pairing || pairing.until < Date.now()) return response.status(403).json({ error: "Start pairing from the PC again." })
     if (supplied !== pairing.code) {
@@ -136,9 +157,47 @@ async function start(port = 0, recoveryDirectory) {
   web.use("/api", (request, response, next) => {
     const credential = request.get("authorization")?.replace(/^Bearer /, "")
     request.role = credential === owner && isLoopback(request) ? "pc" : credential && credential === mobile && mobileUntil > Date.now() ? "phone" : ""
+    const grant = !request.role && isLanAddress(request.socket.remoteAddress) ? collaboration.get(credential) : undefined
+    if (grant) {
+      if (restoringWorkspace) return response.status(503).json({ error: "The host is restoring its workspace. Reconnecting…" })
+      if (!documents.has(grant.document)) return response.status(401).json({ error: "The shared document was closed." })
+      const [action, id] = request.path.split("/").filter(Boolean)
+      const room = request.method === "GET" && ["state", "live", "collab-room"].includes(action)
+      const read = request.method === "GET" && id === grant.document && guestReads.has(action)
+      const edit = request.method === "POST" && id === grant.document && (action === "view" || action === "edit" && guestEdits.has(request.body?.kind))
+      if (!room && !read && !edit) return response.status(403).json({ error: "This command is only available on the host." })
+      request.role = "guest"
+      request.collaborator = grant
+      request.collaboratorToken = credential
+    }
     if (request.role === "phone") lastPhoneSeen = Date.now()
     if (!request.role) return response.status(401).json({ error: "Connect to Elleson Docs to continue." })
     next()
+  })
+  const requestDocument = request => request.collaborator ? documents.get(request.collaborator.document) : document
+  web.post("/api/collab-invite/:id", (request, response) => {
+    if (request.role !== "pc") return response.sendStatus(403)
+    const target = documents.get(request.params.id)
+    if (!target || !["pdf", "docx"].includes(target.extension)) return response.status(404).json({ error: "Open a PDF or DOCX to share." })
+    const invite = collaboration.invite(target.id)
+    const addresses = Object.values(os.networkInterfaces()).flat()
+      .filter(item => item?.family === "IPv4" && !item.internal && isLanAddress(item.address))
+      .map(item => "http://" + item.address + ":" + server.address().port + "/#collab=" + invite)
+    response.json({ addresses, local: "http://127.0.0.1:" + server.address().port + "/#collab=" + invite })
+  })
+  web.get("/api/collab-room", (request, response) => {
+    const target = requestDocument(request)
+    if (!target) return response.json({ participants: [], activity: [] })
+    const id = request.collaborator?.id || (request.role === "pc" ? "host" : "phone")
+    response.json({ document: target.id, self: id, participants: collaboration.roster(target.id), activity: target.collaborationActivity || [] })
+  })
+  web.post("/api/collab-revoke/:id", async (request, response) => {
+    if (request.role !== "pc") return response.sendStatus(403)
+    const operation = editQueue.then(() => collaboration.revoke(request.params.id, typeof request.body.participant === "string" ? request.body.participant : null))
+    editQueue = operation.catch(() => {})
+    await operation
+    publish("refresh")
+    response.sendStatus(204)
   })
 
   web.post("/api/pairing", (request, response) => {
@@ -159,6 +218,37 @@ async function start(port = 0, recoveryDirectory) {
     response.sendStatus(204)
   })
   web.get("/api/library", (request, response) => response.json(library.list()))
+  web.get("/api/library-search", async (request, response) => {
+    const records = library.list().map(record => ({ ...record, latest: library.versions(record.id)[0] }))
+    response.json(await searchLibrary(records, (id, version) => library.read(id, version), request.query.q))
+  })
+  web.post("/api/library/:id/tags", async (request, response) => {
+    await library.updateDetails(request.params.id, { tags: normalizedTags(request.body.tags) })
+    response.sendStatus(204)
+  })
+  web.get("/api/word-styles/:id", async (request, response) => {
+    const current = documents.get(request.params.id)
+    if (!current?.word) return response.sendStatus(404)
+    const { paragraphStyles, standardParagraphStyles } = await import("./word-structure.mjs")
+    const existing = paragraphStyles(current.word.archive, current.word.document?.documentElement.namespaceURI,
+      require("@xmldom/xmldom").DOMParser, require("fflate").strFromU8)
+    response.json([...new Map([...standardParagraphStyles, ...existing].map(style => [style.id, style])).values()])
+  })
+  web.get("/api/form-fields/:id", async (request, response) => {
+    const current = documents.get(request.params.id)
+    if (current?.extension !== "pdf") return response.sendStatus(404)
+    response.json(await (await import("./form-authoring.mjs")).inspectForm(current.bytes, current.fields))
+  })
+  web.post("/api/pdf-copy/:id", async (request, response) => {
+    const result = await exportFile(request.params.id)
+    if (result.extension !== "pdf") throw new Error("Open a PDF first.")
+    const { inspectPrivacy, cleanPdf, optimizePdf } = await import("./pdf-copy-tools.mjs")
+    if (request.body.action === "inspect") return response.json(inspectPrivacy(result.bytes))
+    if (!["clean", "optimize"].includes(request.body.action)) return response.sendStatus(400)
+    const copy = request.body.action === "clean" ? cleanPdf(result.bytes, request.body.categories, request.body.verifyText) : optimizePdf(result.bytes, request.body.resize === true)
+    response.set("X-Result-Report", JSON.stringify({ before: copy.before, after: copy.after, phraseChecked: copy.phraseChecked, originalBytes: result.bytes.length, bytes: copy.bytes.length, changedImages: copy.changedImages }))
+    response.type("application/pdf").send(Buffer.from(copy.bytes))
+  })
   web.get("/api/storage", (request, response) => response.json({ ...library.stats(), recoveryWarning }))
   web.post("/api/storage", async (request, response) => { await library.settings(request.body.limit); response.sendStatus(204) })
   web.delete("/api/library/:id", async (request, response) => { await library.remove(request.params.id); response.sendStatus(204) })
@@ -239,13 +329,30 @@ async function start(port = 0, recoveryDirectory) {
     response.write('data: '+JSON.stringify({type:'preview',preview:peerPreview(client.role),previewSequence})+'\n\n')
     const heartbeat=setInterval(()=>{
       if(client.role==='phone'&&(client.token!==mobile||mobileUntil<=Date.now()))return response.end()
+      if(client.role==='guest'&&!collaboration.get(client.token))return response.end()
       response.write(': keepalive\n\n')
     },15000)
     response.on('close',()=>{clearInterval(heartbeat);liveClients.delete(client)})
   })
+  web.post("/api/sync/retry", (request, response) => {
+    if (request.role !== "pc") return response.sendStatus(403)
+    phoneReceipt = undefined
+    publish("refresh", "pc")
+    response.sendStatus(204)
+  })
   web.get("/api/state", (request, response) => {
     const unchanged = Number(request.query.revision) === revision
+    if (request.role === "phone" && unchanged) phoneReceipt = { token: mobile, revision }
+    const target = requestDocument(request)
+    if (target && request.role === "pc") collaboration.update(target.id, "host")
+    if (request.collaborator) {
+      collaboration.update(target.id, request.collaborator.id)
+      return response.json({ role: "guest", revision, tabs: [],
+        ...(unchanged ? {} : { document: snapshot(target) }) })
+    }
     response.json({
+      failedTabs: request.role === "pc" ? [...failedTabs.values()].map(({id,filename})=>({id,filename})) : [],
+      phoneCurrent: Boolean(phoneReceipt && phoneReceipt.token === mobile && phoneReceipt.revision === revision),
       view: sharedView?.document === document?.id ? sharedView : null,
       revision, role: request.role, paired: Boolean(mobile) && mobileUntil > Date.now(), phoneOnline: Date.now() - lastPhoneSeen < 6000, recoveryWarning, handoff: handoff?.target === request.role ? handoff : null,
       pairRequest: request.role === "pc" && pairRequest && !pairRequest.approved && pairRequest.until > Date.now() ? { id: pairRequest.id, address: pairRequest.address } : null,
@@ -255,9 +362,14 @@ async function start(port = 0, recoveryDirectory) {
     })
   })
   web.post("/api/view/:id", (request, response) => {
-    if (document?.id !== request.params.id) return response.sendStatus(409)
+    const target = requestDocument(request)
+    if (target?.id !== request.params.id) return response.sendStatus(409)
     const {client, page, x, y, zoom} = request.body || {}
     if (typeof client !== 'string' || !/^[a-zA-Z0-9-]{12,80}$/.test(client) || !Number.isInteger(page) || page<1 || page>100000 || ![x,y].every(v=>Number.isFinite(v)&&v>=0&&v<=1) || !Number.isFinite(zoom) || zoom<=0) return response.sendStatus(400)
+    const participant = request.collaborator?.id || (request.role === "pc" ? "host" : "phone")
+    const paragraph = Number.isInteger(request.body.paragraph) && request.body.paragraph >= 0 && request.body.paragraph < (target.word?.lines.length || 0) ? request.body.paragraph + 1 : undefined
+    collaboration.update(target.id, participant, { page, paragraph })
+    if (request.collaborator) return response.sendStatus(204)
     sharedView = {document:document.id,client,page,x,y,zoom,reading:request.body.reading===true, color:/^#[a-f0-9]{6}$/i.test(request.body.color||'')?request.body.color:undefined, thickness:[1,2,4,8].includes(request.body.thickness)?request.body.thickness:undefined,sequence:++viewSequence}
     publish('view',request.role)
     response.sendStatus(204)
@@ -294,14 +406,14 @@ async function start(port = 0, recoveryDirectory) {
     response.sendStatus(204)
   })
   web.get("/api/source/:id", async (request, response) => {
-    const current = document
+    const current = requestDocument(request)
     if (current?.id !== request.params.id) return response.sendStatus(404)
     const bytes = current.word && (Object.keys(current.wordEdits).length || Object.keys(current.wordFormats).length)
       ? await saveWord(current.word, { ...current.wordEdits }, structuredClone(current.wordFormats)) : current.bytes
     response.type(downloadMime[current.extension]).send(Buffer.from(bytes))
   })
   web.get("/api/text/:id/:page", async (request, response) => {
-    const current = document
+    const current = requestDocument(request)
     const index = Number(request.params.page) - 1
     if (current?.id !== request.params.id || current.extension !== "pdf" || !Number.isInteger(index) || index < 0 || index >= current.pages) return response.sendStatus(404)
     const engine = await import("./pdf-edit.mjs")
@@ -395,6 +507,37 @@ async function start(port = 0, recoveryDirectory) {
   web.get("/api/print/:id", async (request, response) => {
     const result = await exportFile(request.params.id, { flatten: true })
     response.type("application/pdf").send(Buffer.from(result.bytes))
+  })
+  web.post("/api/capture-pages/:id", express.raw({ type: "application/octet-stream", limit: maxBytes }), (request, response, next) => {
+    if (request.role !== "phone") return response.sendStatus(403)
+    const operation = editQueue.then(async () => {
+      const current = documents.get(request.params.id)
+      const operationId = request.get("X-Operation-Id")
+      if (current?.extension !== "pdf" || !Buffer.isBuffer(request.body)) return response.sendStatus(409)
+      if (!/^[a-zA-Z0-9-]{12,80}$/.test(operationId || "")) return response.sendStatus(400)
+      if (current.applied.has(operationId)) return response.json(snapshot(current))
+      if (document !== current) return response.status(409).json({ error: "The PC switched documents. Reopen the scan on the intended PDF." })
+      if (current.applied.size >= 30000) throw new Error("Save a copy and reopen it to continue editing.")
+      const target = await PDFDocument.load(current.bytes, { updateMetadata: false })
+      const incoming = await PDFDocument.load(request.body, { updateMetadata: false })
+      if (!incoming.getPageCount() || incoming.getPageCount() > 30 || target.getPageCount() + incoming.getPageCount() > 1000) throw new Error("Choose up to 30 scanned pages and keep the combined PDF below 1,000 pages.")
+      if (incoming.getPages().some(page => page.node.Annots()?.size())) throw new Error("Only unannotated scan pages can be appended.")
+      for (const page of await target.copyPages(incoming, incoming.getPageIndices())) target.addPage(page)
+      const bytes = await target.save()
+      if (bytes.length > maxBytes) throw new Error("The combined PDF exceeds the 40 MB document limit.")
+      history.remember(current, history.capture(current), "phone scan")
+      current.bytes = Buffer.from(bytes)
+      current.pages = target.getPageCount()
+      current.contentVersion++
+      current.changeNumber++
+      current.applied.add(operationId)
+      revision++
+      await checkpoint()
+      publish("refresh")
+      response.json(snapshot(current))
+    })
+    editQueue = operation.catch(() => {})
+    operation.catch(next)
   })
   web.post("/api/combine/:id", express.raw({ type: "application/octet-stream", limit: maxBytes }), (request, response, next) => {
     const operation = editQueue.then(async () => {
@@ -526,6 +669,7 @@ async function start(port = 0, recoveryDirectory) {
       revision++
       await checkpoint()
       inkCommits.set(operationId,current.contentVersion)
+      publish("refresh")
       while(inkCommits.size>128)inkCommits.delete(inkCommits.keys().next().value)
       publish('refresh')
       response.json(snapshot(current))
@@ -536,12 +680,14 @@ async function start(port = 0, recoveryDirectory) {
   async function applyEdit(request, response) {
     const current = documents.get(request.params.id)
     if (!current || current.id !== request.params.id) return response.status(409).json({ error: "The open document changed." })
+    if (request.collaborator && collaboration.get(request.collaboratorToken)?.id !== request.collaborator.id) return response.sendStatus(401)
     const edit = request.body
     if (!edit || !/^[a-zA-Z0-9-]{12,80}$/.test(edit.id ?? "")) return response.sendStatus(400)
     if (current.applied.has(edit.id)) { await checkpoint(); return response.json(snapshot(current)) }
     if (current.applied.size >= 30000) throw new Error("Save a copy and reopen it to continue editing.")
     const before = history.capture(current)
     if (edit.kind === "history-undo" || edit.kind === "history-redo") {
+      if (collaboration.hasGuests(current.id)) return response.status(409).json({ error: "End the collaboration before restoring whole-document history." })
       history.restore(current, edit.kind === "history-undo" ? "undo" : "redo")
     } else if (edit.kind === "pages" && current.extension === "pdf" && edit.version === current.contentVersion) {
       const engine = await import("./pdf-edit.mjs")
@@ -567,6 +713,15 @@ async function start(port = 0, recoveryDirectory) {
       current.bytes = engine.replace(current.bytes, edit.page - 1, edit.span, edit.before, edit.value, run, edit.font, edit.layout)
       current.ocr[edit.page - 1] = []
       current.contentVersion++
+    } else if (edit.kind === "form-author" && current.extension === "pdf") {
+      if (edit.version !== current.contentVersion) throw Object.assign(new Error("The PDF changed. Reopen the form tools."), { status: 409 })
+      const bytes = await (await import("./form-authoring.mjs")).authorForm(current.bytes, edit.changes, current.fields)
+      if (bytes.length > maxBytes) throw new Error("The updated PDF exceeds the document size limit.")
+      const originalFields = fieldValues(await PDFDocument.load(bytes))
+      current.bytes = Buffer.from(bytes)
+      current.originalFields = originalFields
+      current.fields = Object.create(null)
+      current.contentVersion++
     } else if (edit.kind === "word-tools" && current.word) {
       if (edit.version !== current.contentVersion) throw Object.assign(new Error("The document changed. Select the text again."), { status: 409 })
       const parsed = await readWord(await saveWord(current.word, current.wordEdits, current.wordFormats), "docx")
@@ -574,7 +729,8 @@ async function start(port = 0, recoveryDirectory) {
       const { strFromU8, strToU8, zipSync } = require("fflate")
       ;(await import("./word-tools.mjs")).editWord(parsed.document, parsed.archive, edit, DOMParser, XMLSerializer, strFromU8, strToU8)
       parsed.archive["word/document.xml"] = strToU8(new XMLSerializer().serializeToString(parsed.document))
-      await applyWordBytes(current, Buffer.from(zipSync(parsed.archive)), edit.action !== 'range')
+      const { nonStructuralWordAction } = await import("./word-advanced-structure.mjs")
+      await applyWordBytes(current, Buffer.from(zipSync(parsed.archive)), !nonStructuralWordAction(edit.action))
     } else if (edit.kind === "review" && current.extension === "pdf") {
       if (edit.version !== current.contentVersion) throw Object.assign(new Error("The page changed. Review the latest page."), { status: 409 })
       current.bytes = (await import("./pdf-tools.mjs")).review(current.bytes, edit)
@@ -601,8 +757,10 @@ async function start(port = 0, recoveryDirectory) {
     } else if (edit.kind === "word" && current.word?.lines[edit.index]?.editable && typeof edit.value === "string" && edit.value.length <= 16000) {
       if ((edit.structureVersion ?? 0) !== (current.structureVersion || 0)) return response.status(409).json({ error: "The paragraph order changed. Your draft is retained; review it before applying to the latest document.", code: "STRUCTURE_CONFLICT" })
       const existing = current.wordEdits[edit.index] ?? current.word.lines[edit.index].text
-      if (existing !== edit.before) return response.status(409).json({ error: "This paragraph changed on the other device.", code: "EDIT_CONFLICT", actual: existing })
-      current.wordEdits[edit.index] = edit.value
+      const proposed = existing === edit.before ? edit.value :
+        collaboration.hasGuests(current.id) ? mergeParagraph(edit.before, existing, edit.value) : undefined
+      if (proposed === undefined || proposed.length > 16000) return response.status(409).json({ error: "Another editor changed the same paragraph.", code: "EDIT_CONFLICT", actual: existing })
+      current.wordEdits[edit.index] = proposed
       current.contentVersion++
     } else if (edit.kind === "field" && current.extension === "pdf" && typeof edit.name === "string" && edit.name.length <= 300 && validFieldValue(edit.value)) {
       const actual = current.fields[edit.name] ?? current.originalFields?.[edit.name] ?? ""
@@ -635,6 +793,10 @@ async function start(port = 0, recoveryDirectory) {
     }
     if (["history-undo", "history-redo"].includes(edit.kind) && current.word) current.structureVersion = (current.structureVersion || 0) + 1
     current.applied.add(edit.id)
+    if (request.collaborator || collaboration.hasGuests(current.id)) {
+      const author = request.collaborator || { id: request.role === "pc" ? "host" : "phone", name: request.role === "pc" ? "Host" : "Paired phone" }
+      current.collaborationActivity = [...(current.collaborationActivity || []), { author: author.name, participant: author.id, operation: edit.id, kind: edit.kind, at: Date.now() }].slice(-100)
+    }
     current.changeNumber++
     revision++
     await checkpoint()
@@ -698,8 +860,10 @@ async function start(port = 0, recoveryDirectory) {
   })
 
   const server = await new Promise((resolve, reject) => {
-    const listener = web.listen(port, "0.0.0.0", () => resolve(listener))
-    listener.once("error", reject)
+    const listener = web.listen(port, "0.0.0.0", error => {
+      if (error) reject(error)
+      else resolve(listener)
+    })
   })
   if (recoveryDirectory) require("./discovery.cjs").advertise(server)
   if (recoveryDirectory) {
@@ -715,17 +879,18 @@ async function start(port = 0, recoveryDirectory) {
           workspace = { active: saved.id, documents: [saved] }
         }
       }
-      for (const saved of workspace.documents || []) {
+      const tabs = workspace.documents || []
+      const restoreOrder = [...tabs].sort((a,b) => Number(b.id === workspace.active) - Number(a.id === workspace.active))
+      for (const [index, saved] of restoreOrder.entries()) {
+        onRestore?.(index + 1, tabs.length, saved.filename)
         try {
-          if (!/^[a-f0-9-]+\.bin$/.test(saved.source)) throw new Error("Invalid recovery source")
-          await open(saved.filename, await fs.readFile(path.join(recoveryDirectory, saved.source)), true)
-          documents.delete(document.id)
-          Object.assign(document, saved, { bytes: document.bytes, word: document.word, applied: new Set(saved.applied),
-            fields: Object.assign(Object.create(null), saved.fields), wordEdits: Object.assign(Object.create(null), saved.wordEdits),
-            wordFormats: Object.assign(Object.create(null), saved.wordFormats), ocr: Object.assign(Object.create(null), saved.ocr),
-            changeNumber: saved.changeNumber ?? saved.applied.length, savedNumber: saved.savedNumber ?? 0 })
-          documents.set(document.id, document)
-        } catch { recoveryWarning = "Some tabs could not be recovered. Reopen the original file or a saved version from Files." }
+          await restoreTab(saved)
+        } catch { failedTabs.set(saved.id, saved) }
+      }
+      // Restore the original tab order after prioritizing the active document.
+      for (const saved of tabs) {
+        const tab = documents.get(saved.id)
+        if (tab) { documents.delete(saved.id); documents.set(saved.id, tab) }
       }
       document = documents.get(workspace.active) || [...documents.values()].at(-1) || null
     } catch (error) {
@@ -733,14 +898,42 @@ async function start(port = 0, recoveryDirectory) {
     }
   }
 
+  restoringWorkspace = false
+
+  async function restoreTab(saved) {
+    if (!/^[a-f0-9-]+\.bin$/.test(saved.source)) throw new Error("Invalid recovery source")
+    await openNow(saved.filename, await fs.readFile(path.join(recoveryDirectory, saved.source)), true)
+    documents.delete(document.id)
+    Object.assign(document, saved, { bytes: document.bytes, word: document.word, applied: new Set(saved.applied),
+      fields: Object.assign(Object.create(null), saved.fields), wordEdits: Object.assign(Object.create(null), saved.wordEdits),
+      wordFormats: Object.assign(Object.create(null), saved.wordFormats), ocr: Object.assign(Object.create(null), saved.ocr),
+      changeNumber: saved.changeNumber ?? saved.applied.length, savedNumber: saved.savedNumber ?? 0 })
+    documents.set(document.id, document)
+  }
+
+  web.post("/api/recovery/retry/:id", async (request, response) => {
+    if (request.role !== "pc") return response.sendStatus(403)
+    const operation = editQueue.then(async () => {
+      const saved = failedTabs.get(request.params.id)
+      if (!saved) return
+      await restoreTab(saved)
+      failedTabs.delete(saved.id)
+      await checkpoint()
+      publish("refresh")
+    })
+    editQueue = operation.catch(() => {})
+    try { await operation; response.sendStatus(204) }
+    catch { response.status(422).json({error:"This tab still cannot be recovered. Its saved recovery entry is retained."}) }
+  })
+
   async function checkpoint() {
     if (!recoveryDirectory) return
     const entries = [...documents.values()].map(current => ({ current, bytes: current.bytes, metadata: {
       id: current.id, filename: current.filename, source: current.id + "-" + current.contentVersion + ".bin", contentVersion: current.contentVersion, structureVersion: current.structureVersion || 0, libraryId: current.libraryId,
       fields: { ...current.fields }, wordEdits: { ...current.wordEdits }, wordFormats: structuredClone(current.wordFormats), marks: structuredClone(current.marks),
-      ocr: structuredClone(current.ocr), applied: [...current.applied], changeNumber: current.changeNumber, savedNumber: current.savedNumber
+      ocr: structuredClone(current.ocr), applied: [...current.applied], collaborationActivity: current.collaborationActivity, changeNumber: current.changeNumber, savedNumber: current.savedNumber
     } }))
-    const metadata = JSON.stringify({ active: document?.id, documents: entries.map(entry => entry.metadata) })
+    const metadata = JSON.stringify({ active: document?.id, documents: [...entries.map(entry => entry.metadata), ...failedTabs.values()] })
     checkpointQueue = checkpointQueue.catch(() => {}).then(async () => {
       await fs.mkdir(recoveryDirectory, { recursive: true })
       for (const entry of entries) {
@@ -755,7 +948,7 @@ async function start(port = 0, recoveryDirectory) {
       // Retain the previous workspace's sources as well, so its recovery index remains usable.
       let backup = []
       try { backup = JSON.parse(await fs.readFile(path.join(recoveryDirectory, "workspace.backup.json"), "utf8")).documents || [] } catch {}
-      const keep = new Set([...entries.map(entry => entry.metadata.source), ...backup.map(entry => entry.source)])
+      const keep = new Set([...entries.map(entry => entry.metadata.source), ...[...failedTabs.values()].map(entry => entry.source), ...backup.map(entry => entry.source)])
       for (const file of await fs.readdir(recoveryDirectory)) if (/^[a-f0-9-]+\.bin$/.test(file) && !keep.has(file)) await fs.unlink(path.join(recoveryDirectory, file)).catch(() => {})
     })
     return checkpointQueue

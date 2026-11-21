@@ -100,7 +100,8 @@ export function installMobileShell({get,stage,getPage,readingView}) {
     else if(!wordDrawing())$('word-draw').click()
     drawing.open=true
   },'draw')
-  const dock=group('mobile-mode-dock',read,edit,draw,button('Tools',()=>$('document-extras').click(),'tools'))
+  const pagesButton=button('Pages',()=>{read.click();$('quick-page').click()},'read')
+  const dock=group('mobile-mode-dock',pagesButton,edit,draw,button('More',()=>{more.open=!more.open},'tools'))
   dock.setAttribute('role','navigation')
   dock.setAttribute('aria-label','Document modes')
   toolbar.after(dock)
@@ -112,6 +113,8 @@ export function installMobileShell({get,stage,getPage,readingView}) {
   })
   inkDone.setAttribute('aria-label','Done drawing')
   panel(drawing).prepend(group('mobile-ink-actions',
+    button('Pen',()=>{const eraser=$('drawing-eraser');eraser.checked=false;eraser.dispatchEvent(new Event('input',{bubbles:true}));draw.click()}),
+    button('Highlighter',()=>$('suite-highlighter').click()),
     button('Undo stroke',()=>$('history-undo').click()),
     button('Pen settings',()=>panel(drawing).classList.toggle('ink-settings-expanded')),
     button('Eraser',()=>{const toggle=$('drawing-eraser');toggle.checked=!toggle.checked;toggle.dispatchEvent(new Event('input',{bubbles:true}))}),
@@ -159,7 +162,7 @@ export function installMobileShell({get,stage,getPage,readingView}) {
     save.disabled=$('save-original').disabled
     direct.hidden=!doc
     const ink=isPdf()?mode('pen').getAttribute('aria-pressed')==='true':wordDrawing()
-    read.setAttribute('aria-pressed',String(!ink&&mode('read').getAttribute('aria-pressed')==='true'))
+    pagesButton.setAttribute('aria-pressed',String(!ink&&mode('read').getAttribute('aria-pressed')==='true'))
     edit.setAttribute('aria-pressed',String(!ink&&mode(isPdf()?'edit':'word').getAttribute('aria-pressed')==='true'))
     draw.setAttribute('aria-pressed',String(ink))
     if(!window.desktopDocs&&!matchMedia('(max-width:600px)').matches)return

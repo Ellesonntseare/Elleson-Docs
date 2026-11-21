@@ -1,3 +1,4 @@
+import {previewSignature,cancelPlacement} from './signature-placement.mjs'
 import {installPictures} from './pictures.mjs'
 import {installQuickPen} from './quick-pen.mjs'
 import {installPartialEraser} from './partial-eraser.mjs'
@@ -9,6 +10,8 @@ import {installTapTools} from './tap-tools.mjs'
 import {installDocumentSuite} from './document-suite.mjs'
 import {installDrawingSuite} from './drawing-suite.mjs'
 import {installCompanion} from './companion-mode.mjs'
+import {installPdfFeatures} from './pdf-features.mjs'
+import {installCollaboration} from './collaboration-ui.mjs'
 import {openPictureAsPdf,pictureType} from './picture-import.mjs'
 import {installDocumentContext} from './document-context.mjs'
 import {installWheelZoom} from './wheel-zoom.mjs'
@@ -57,11 +60,15 @@ passwordDialog.querySelector('form').onsubmit=async event=>{
     lockedFile=null;passwordDialog.querySelector('input').value='';passwordDialog.close();await refresh()
   }catch(error){passwordDialog.querySelector('[role=alert]').textContent=error.message}
 }
-const owner = new URLSearchParams(location.hash.slice(1)).get("owner") ||
-  (location.hostname === "appassets.androidplatform.net" ? "local" : sessionStorage.getItem("elleson-owner"))
+const startup = new URLSearchParams(location.hash.slice(1))
+const invitation = startup.get("collab")
+const guestSession = invitation ? "" : sessionStorage.getItem("elleson-collaboration")
+const owner = !invitation && !guestSession && (startup.get("owner") ||
+  (location.hostname === "appassets.androidplatform.net" ? "local" : sessionStorage.getItem("elleson-owner")))
 if (owner) { sessionStorage.setItem("elleson-owner",owner); history.replaceState(null,"","/") }
-let credential = owner || sessionStorage.getItem("elleson-session") || localStorage.getItem("elleson-session") || ""
-let role = owner ? "pc" : "phone"
+let credential = guestSession || owner || (!invitation && (sessionStorage.getItem("elleson-session") || localStorage.getItem("elleson-session"))) || ""
+let role = invitation || guestSession ? "guest" : owner ? "pc" : "phone"
+const documentStorage = role === "guest" ? sessionStorage : localStorage
 let current = null
 let revision = -1
 let pdf
@@ -74,7 +81,7 @@ let renderIndex = 0
 let activeRenderTask
 let localSequence = 0
 let draft
-let inkBounds
+
 let activeText
 let pendingStamp
 let refreshPending
@@ -112,29 +119,50 @@ let queuedChanges = []
 let flushing = false
 let queueFlush
 let requestedPhone
-const tabViews = new Map()
-const inputDrafts = createDraftJournal(localStorage, message => status(message))
+let tabViews
+try { tabViews = new Map(JSON.parse(documentStorage.getItem("elleson-reading-positions") || "[]")) }
+catch { tabViews = new Map() }
+let restoringPosition = false
+function rememberPosition() {
+  if (!current || restoringPosition) return
+  tabViews.delete(current.id)
+  tabViews.set(current.id, { page, zoom: current.lines ? wordPageSizing.getZoom() : zoom, scroll: $.stage.scrollTop, left: $.stage.scrollLeft })
+  try { documentStorage.setItem("elleson-reading-positions", JSON.stringify([...tabViews].slice(-50))) } catch {}
+}
+function restorePosition() {
+  if (!restoringPosition) return
+  const view = tabViews.get(current?.id)
+  if (view) $.stage.scrollTo(view.left || 0, view.scroll || 0)
+  restoringPosition = false
+}
+let positionTimer
+$.stage.addEventListener("scroll", () => {
+  clearTimeout(positionTimer)
+  positionTimer = setTimeout(rememberPosition, 180)
+}, { passive: true })
+window.addEventListener("pagehide", rememberPosition)
+const inputDrafts = createDraftJournal(documentStorage, message => status(message))
 const sameValue = (a, b) => JSON.stringify(a) === JSON.stringify(b)
 const localValue = (id, change) => inputDrafts.latest(id, change)?.value ?? queuedChanges.findLast(item => item.document === id && item.change.kind === change.kind && (change.kind === 'word' ? item.change.index === change.index && item.change.structureVersion === change.structureVersion : item.change.name === change.name))?.change.value
 
-try { queuedChanges = JSON.parse(localStorage.getItem("elleson-pending-edits") || "[]") } catch {}
+try { queuedChanges = JSON.parse(documentStorage.getItem("elleson-pending-edits") || "[]") } catch {}
 for (const record of inputDrafts.all()) {
   if (record.change.kind === 'ink' && record.change.points.length < 2) { inputDrafts.acknowledge(record.document, record.change); continue }
   if (!queuedChanges.some(item => item.change.id === record.change.id)) queuedChanges.push(record)
 }
 const persistQueue = () => {
-  try { localStorage.setItem("elleson-pending-edits", JSON.stringify(queuedChanges)) }
+  try { documentStorage.setItem("elleson-pending-edits", JSON.stringify(queuedChanges)) }
   catch { status("Device storage could not retain pending changes. Keep this window open until connected.") }
 }
 const updateConnection = () => {
   const blocked=queuedChanges.filter(item=>item.blocked).length
   const count=queuedChanges.length-blocked
-  const message=[networkState,count?count+' waiting to sync':'',blocked?blocked+' to review':''].filter(Boolean).join(' � ')
+  const message=[networkState,count?count+' waiting to sync':'',blocked?blocked+' to review':''].filter(Boolean).join(' · ')
   if($.connection.textContent!==message)$.connection.textContent=message
 }
 window.addEventListener('online',()=>{void refresh();void flushQueue()})
 try { openTabs = JSON.parse(sessionStorage.getItem("elleson-open-tabs") || "[]") } catch {}
-try { savedSignatures = JSON.parse(localStorage.getItem("elleson-signatures") || "[]") } catch {}
+try { savedSignatures = JSON.parse(documentStorage.getItem("elleson-signatures") || "[]") } catch {}
 
 function status(message) { $.status.textContent = message }
 const bookmarkKey = () => "elleson-bookmarks-" + (current?.libraryId || current?.id)
@@ -220,18 +248,19 @@ function layout() {
   $["insert-table"].disabled = selectedWordIndex === null
   $["insert-image"].disabled = selectedWordIndex === null
   const waiting = current && (queuedChanges.some(item => item.document === current.id) || inputDrafts.all().some(item => item.document === current.id))
-  $["save-state"].textContent = current ? !inputDrafts.healthy ? "Recovery storage unavailable - keep this window open" : waiting ? "Progress stored on this device - waiting to sync" : current.dirty ? "Recovery copy stored - file has unsaved changes" : "File saved" : ""
+  $["save-state"].textContent = current ? !inputDrafts.healthy ? "Recovery storage unavailable - keep this window open" : waiting ? "Progress stored on this device - waiting to sync" : current.dirty ? "Recovery copy stored - file has unsaved changes" : location.hostname === "appassets.androidplatform.net" ? "Saved on this phone" : "Saved on this PC" : ""
   $["flatten-copy"].disabled = current?.extension !== "pdf"
   $["history-undo"].disabled = !current
   $["history-undo"].title = current?.undoLabel ? 'Undo '+current.undoLabel : 'Undo'
   $["history-redo"].title = current?.redoLabel ? 'Redo '+current.redoLabel : 'Redo'
   $["history-redo"].disabled = !current?.canRedo
   const connected = Boolean(credential)
+  document.body.classList.toggle("collaboration-guest", role === "guest")
   const hasPdf = current?.extension === "pdf"
   const saveAsLabel=hasPdf?'Save as PDF':'Save As'+String.fromCharCode(8230)
   if($['save-as'].textContent!==saveAsLabel)$['save-as'].textContent=saveAsLabel
-  $.open.hidden = !connected
-  $.library.hidden = !connected
+  $.open.hidden = !connected || role === "guest"
+  $.library.hidden = !connected || role === "guest"
   $.connect.hidden = !connected || role !== "pc"
   $.connect.textContent = location.hostname === "appassets.androidplatform.net" ? "Connect to PC" : "Connect phone"
   $.find.hidden = !current
@@ -242,7 +271,7 @@ function layout() {
   $["handoff"].hidden = !current || (!window.EllesonAndroid && role !== "pc")
   $["handoff"].textContent = location.hostname === "appassets.androidplatform.net" ? "Continue on PC" : role === "pc" ? "Continue on phone" : "Use on phone independently"
   $.welcome.hidden = !connected || Boolean(current)
-  $["pair-form"].hidden = connected
+  $["pair-form"].hidden = connected || role === "guest"
   $.toolbar.hidden = !current
   $["pdf-tools"].hidden = !hasPdf
   $["word-tools"].hidden = !current || hasPdf
@@ -311,6 +340,7 @@ $["mobile-tabs"].addEventListener("change", () => {
 })
 
 function setMode(value) {
+  cancelPlacement()
   const previousMode=mode
   if(current?.lines&&['word','read'].includes(value))wordInk.stopDrawing()
   mode = value
@@ -329,6 +359,29 @@ function setMode(value) {
   tools.updated()
 }
 
+let deliverySince = 0
+let deliveryRevision
+function updateDelivery(state) {
+  const panel = document.getElementById("delivery")
+  const retry = document.getElementById("retry-delivery")
+  const text = document.getElementById("delivery-state")
+  panel.hidden = !state.paired || role !== "pc"
+  if (panel.hidden) { deliverySince = 0; return }
+  const received = state.phoneOnline && state.phoneCurrent
+  if (received) deliverySince = 0
+  else if (!deliverySince || state.revision !== deliveryRevision) deliverySince = Date.now()
+  deliveryRevision = state.revision
+  const stalled = !received && (!state.phoneOnline || Date.now() - deliverySince > 8000)
+  text.textContent = received ? "Phone up to date" : stalled ? "Waiting for phone" : "Sending to phone"
+  retry.hidden = !stalled
+}
+document.getElementById("retry-delivery").onclick = async () => {
+  try {
+    await request("/api/sync/retry", {method:"POST"})
+    deliverySince = Date.now()
+    await refresh()
+  } catch (error) { fail(error) }
+}
 function refresh() {
   if(draft||wordInk.drawing||$.stage.dataset.navigating==='true')return Promise.resolve()
   if (refreshPending) return refreshPending
@@ -339,12 +392,27 @@ function refresh() {
       const response = await request("/api/state?revision=" + revision)
       const state = await response.json()
       if(draft||wordInk.drawing||$.stage.dataset.navigating==='true')return
-      $["recovery-warning"].hidden = !state.recoveryWarning
-      $["recovery-warning"].textContent = state.recoveryWarning || ""
-      networkState = location.hostname === "appassets.androidplatform.net" ? "On this phone" : state.paired ? state.phoneOnline === false ? "Phone reconnecting" : "Phone and PC connected" : "Connected"
+      const warning = $["recovery-warning"]
+      const warningsKey = JSON.stringify([state.recoveryWarning,state.failedTabs])
+      if(warning.dataset.key !== warningsKey) {
+        warning.dataset.key = warningsKey
+        warning.textContent = state.recoveryWarning || ""
+        for(const tab of state.failedTabs || []) {
+          const retry=document.createElement("button")
+          retry.textContent="Retry opening " + tab.filename
+          retry.onclick=async()=>{
+            try {await request("/api/recovery/retry/"+encodeURIComponent(tab.id),{method:"POST"});await refresh()}
+            catch(error){fail(error)}
+          }
+          warning.append(retry)
+        }
+        warning.hidden = !warning.textContent
+      }
+      networkState = state.role === "guest" ? "Live collaboration" : location.hostname === "appassets.androidplatform.net" ? "On this phone" : state.paired ? state.phoneOnline === false ? "Phone reconnecting" : "Phone and PC connected" : "Connected"
       updateConnection()
       if (state.tabs) openTabs = state.tabs
       role = state.role
+      updateDelivery(state)
       sharedView.receive(state.view)
       receivePreview(state)
       if (queuedChanges.length && !flushing) void flushQueue()
@@ -359,7 +427,7 @@ function refresh() {
       revision = state.revision
       const before = current?.id
       const oldVersion = current?.contentVersion
-      if (before && before !== state.document?.id) tabViews.set(before, { page, zoom, scroll: $.stage.scrollTop })
+      if (before && before !== state.document?.id) rememberPosition()
       if(current?.id===state.document?.id&&current?.lines&&state.document?.lines)state.document.lines.forEach((line,index)=>{if(line.text!==current.lines[index]?.text)remoteLineChanges.add(index)})
       current = state.document
       if (before !== current?.id && readingView.active) void readingView.close()
@@ -371,6 +439,8 @@ function refresh() {
         const view = tabViews.get(current?.id)
         page = view?.page || 1
         zoom = view?.zoom || 1
+        restoringPosition = Boolean(current)
+        if (current?.lines) wordPageSizing.setZoom(zoom)
         viewport = undefined
         if (loadingTask) void loadingTask.destroy().catch(() => {})
         loadingTask = undefined
@@ -387,10 +457,13 @@ function refresh() {
       tools.updated()
     } catch (error) {
       if (error.status === 401) {
-        sessionStorage.removeItem("elleson-owner")
+        if (role === "guest") sessionStorage.removeItem("elleson-collaboration")
+        else {
+          sessionStorage.removeItem("elleson-owner")
+          sessionStorage.removeItem("elleson-session")
+          localStorage.removeItem("elleson-session")
+        }
         credential = ""
-        sessionStorage.removeItem("elleson-session")
-        localStorage.removeItem("elleson-session")
         revision = -1
         current = null
         layout()
@@ -443,7 +516,7 @@ function edit(change) {
       }
       if (error.status === 409 && ["field", "word"].includes(change.kind) && Object.hasOwn(error.problem || {}, "actual")) {
         conflictHistory.remember(id,payload,error.problem.actual)
-        if (confirm("This entry was changed on the other device. Choose OK to keep your entry, or Cancel to use the latest entry.")) {
+        if (confirm("Another editor changed this entry. Choose OK to keep your entry, or Cancel to use the latest entry.")) {
           const retry = { ...change, id: editId(), before: error.problem.actual }
           try {
             const response = await postJson("/api/edit/" + id, retry)
@@ -613,7 +686,7 @@ async function renderPage() {
     const natural = pdfPage.getViewport({ scale: 1 })
     const width = Math.max(140, $.stage.clientWidth - 42)
     const height = Math.max(160, $.stage.clientHeight - 42)
-    const base = Math.min(width / natural.width, height / natural.height, 2)
+    const base = matchMedia("(max-width:600px)").matches ? Math.min(($.stage.clientWidth - 12) / natural.width, 2) : Math.min(width / natural.width, height / natural.height, 2)
     const frame = pdfPage.getViewport({ scale: base * zoom })
     const pixelRatio = Math.min(devicePixelRatio || 1, 2, 2800 / Math.max(frame.width, frame.height))
     const canvas = document.createElement("canvas")
@@ -655,6 +728,8 @@ async function renderPage() {
     }
     drawMarks()
     if (mode === "edit") void createTextTargets()
+    restorePosition()
+    rememberPosition()
     status("PDF ready")
     tools.updated()
   } catch (error) { if (source === pdf && sequence === renderIndex) fail(error) }
@@ -759,7 +834,7 @@ function go(number) {
   if (!pdf) return
   page = Math.max(1, Math.min(pdf.numPages, number || 1))
   $.stage.scrollTop = $.stage.scrollLeft = 0
-  void renderPage()
+  return renderPage()
 }
 
 async function renderWord() {
@@ -797,6 +872,7 @@ async function renderWord() {
       }
     }
     $.stage.scrollTop = scrollTop; $.stage.scrollLeft = scrollLeft
+    restorePosition()
   }
   const editable = (element, line, index) => {
     element.dataset.wordIndex = index
@@ -827,6 +903,27 @@ async function renderWord() {
       const change = inputDrafts.latest(source.id, {kind:'word', index, structureVersion}) || inputDrafts.save(source.id, {kind:'word', index, structureVersion, before, value})
       void edit({...change, before, value, structureVersion}).then(success => {
         if (!success) lastSynced = before
+        const merged = current?.id === source.id && current.structureVersion === structureVersion && current.lines?.[index]?.text
+        // Reflect a concurrent merge without replacing newer input typed while
+        // this request was in flight. A blur will render the committed layout.
+        if (success && typeof merged === "string" && merged !== value && merged !== before &&
+            element.isConnected && element.textContent === value && lastSynced === value) {
+          const selection = getSelection()
+          let caret
+          if (selection?.isCollapsed && element.contains(selection.anchorNode)) {
+            const prefix = document.createRange()
+            prefix.selectNodeContents(element)
+            prefix.setEnd(selection.anchorNode, selection.anchorOffset)
+            caret = prefix.toString().length
+          }
+          let start = 0
+          while (start < Math.min(value.length, merged.length) && value[start] === merged[start]) start++
+          element.textContent = lastSynced = merged
+          if (caret !== undefined && element.firstChild) {
+            const offset = Math.max(0, Math.min(merged.length, caret > start ? caret + merged.length - value.length : caret))
+            selection.collapse(element.firstChild, offset)
+          }
+        }
         if (!editingWord && current?.id === source.id) void renderWord()
       })
     }
@@ -980,6 +1077,35 @@ $["scan-create"].addEventListener("click", async () => {
   } catch (error) { fail(error) }
   // Retain photos and crop settings when conversion or opening fails.
 })
+const appendScan = document.createElement("button")
+appendScan.textContent = "Append scan to shared PDF"
+appendScan.hidden = true
+$["scan-create"].before(appendScan)
+let captureTarget
+new MutationObserver(() => {
+  if (!$["scan-dialog"].open) return
+  captureTarget ||= role === "phone" && current?.extension === "pdf" && location.hostname !== "appassets.androidplatform.net" ? { id: current.id, filename: current.filename, operation: editId() } : null
+  appendScan.hidden = !captureTarget
+}).observe($["scan-dialog"], { attributes: true, attributeFilter: ["open"] })
+$["scan-dialog"].addEventListener("close", () => { captureTarget = null })
+appendScan.onclick = async () => {
+  const target = captureTarget
+  if (!target || !confirm("Append these scanned pages to " + target.filename + "?")) return
+  appendScan.disabled = true
+  try {
+    await ensureSynced()
+    const scan = await tools.createScan()
+    await request("/api/capture-pages/" + target.id, {
+      method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Operation-Id": target.operation }, body: scan
+    })
+    revision = -1
+    $["scan-dialog"].close()
+    await refresh()
+    tools.clearScans()
+    status("Scanned pages added to " + target.filename)
+  } catch (error) { fail(error) }
+  finally { appendScan.disabled = false }
+}
 async function openSaved(id, version) {
   document.activeElement?.blur()
   await pendingEdit
@@ -990,16 +1116,56 @@ async function openSaved(id, version) {
   revision = -1
   await refresh()
 }
+const librarySearch = document.createElement("form")
+const tagDialog = document.createElement("dialog")
+tagDialog.className = "document-suite"
+tagDialog.innerHTML = '<h2>Document tags</h2><form><label>Comma-separated tags <input name="tags" maxlength="820"></label><p role="status"></p><button class="primary">Save tags</button><button type="button">Cancel</button></form>'
+document.body.append(tagDialog)
+tagDialog.querySelector('button[type="button"]').onclick = () => tagDialog.close()
+librarySearch.setAttribute("role", "search")
+librarySearch.className = "actions"
+librarySearch.innerHTML = '<label>Search saved files <input type="search" name="query" maxlength="200"></label><label>Tag <select name="tag" aria-label="Filter by tag"></select></label><label>Type <select name="type"><option value="">All</option><option value="pdf">PDF</option><option value="docx">Word</option></select></label><label>Updated <select name="updated"><option value="0">Any time</option><option value="7">Past week</option><option value="30">Past month</option></select></label><button>Search</button>'
+$["library-list"].before(librarySearch)
+let libraryRender = 0
+librarySearch.onsubmit = event => { event.preventDefault(); void showLibrary().catch(fail) }
+for (const name of ["tag", "type", "updated"]) librarySearch.elements.namedItem(name).onchange = () => void showLibrary().catch(fail)
 async function showLibrary() {
+  const sequence = ++libraryRender
   const records = await (await request("/api/library")).json()
-  const rows = records.map(record => {
+  if (sequence !== libraryRender) return
+  const tag = librarySearch.elements.namedItem("tag")
+  const selected = tag.value
+  const tags = [...new Set(records.flatMap(record => record.tags || []))].sort()
+  tag.replaceChildren(new Option("All tags", ""), ...tags.map(item => new Option(item, item)))
+  if (tags.includes(selected)) tag.value = selected
+  const type = librarySearch.elements.namedItem("type").value
+  const updated = Number(librarySearch.elements.namedItem("updated").value)
+  const query = librarySearch.elements.namedItem("query").value.trim()
+  if (!$["library-dialog"].open) $["library-dialog"].showModal()
+  if (query) $["library-list"].textContent = "Searching saved files…"
+  const results = query ? await (await request("/api/library-search?q=" + encodeURIComponent(query))).json() : null
+  if (sequence !== libraryRender || !$["library-dialog"].open) return
+  const matches = new Map(results?.matches.map(match => [match.id, match]))
+  const rows = records.filter(record => (!query || matches.has(record.id)) &&
+    (!tag.value || record.tags?.includes(tag.value)) &&
+    (!updated || record.updated >= Date.now() - updated * 86400000) &&
+    (!type || (type === "docx" ? /\.docx?$/i.test(record.filename) : /\.pdf$/i.test(record.filename)))).map(record => {
     const row = document.createElement("div")
     row.className = "library-row"
     const open = document.createElement("button")
     open.textContent = record.filename
-    open.addEventListener("click", () => void openSaved(record.id).catch(fail))
+    const match = matches.get(record.id)
+    open.addEventListener("click", () => void (async () => {
+      await openSaved(record.id)
+      if (match?.page && current?.libraryId === record.id) {
+        if (!pdf) await loadPdf(current.id)
+        if (current?.libraryId === record.id) await go(match.page)
+      }
+    })().catch(fail))
     const details = document.createElement("small")
     details.textContent = new Date(record.updated).toLocaleString() + " · " + record.versionCount + " saved version(s)"
+    if (record.tags?.length) details.append(" · " + record.tags.join(", "))
+    if (match) details.append((match.page ? " · Page " + match.page : "") + " · " + match.snippet)
     const actions = document.createElement("div")
     actions.className = "actions"
     const pin = document.createElement("button")
@@ -1034,12 +1200,32 @@ async function showLibrary() {
         $["versions-dialog"].showModal()
       } catch (error) { fail(error) }
     })
-    actions.append(pin, versions)
+    const editTags = document.createElement("button")
+    editTags.textContent = "Edit tags"
+    editTags.onclick = () => {
+      const form = tagDialog.querySelector("form"), input = form.elements.namedItem("tags")
+      const status = tagDialog.querySelector("[role=status]")
+      status.textContent = ""
+      input.value = (record.tags || []).join(", ")
+      form.onsubmit = async event => {
+        event.preventDefault()
+        event.submitter.disabled = true
+        try {
+          await postJson("/api/library/" + record.id + "/tags", { tags: input.value.split(",") })
+          tagDialog.close()
+          await showLibrary()
+        } catch (error) { status.textContent = error.message }
+        finally { event.submitter.disabled = false }
+      }
+      tagDialog.showModal()
+    }
+    actions.append(pin, versions, editTags)
     row.append(open, details, actions)
     return row
   })
   $["library-list"].replaceChildren(...rows)
-  if (!rows.length) $["library-list"].textContent = "Open a document to add it to your files."
+  if (!rows.length) $["library-list"].textContent = records.length ? "No matching saved files." : "Open a document to add it to your files."
+  if (results?.skipped) $["library-list"].append(" " + results.skipped + " files could not be indexed.")
   if (!$["library-dialog"].open) $["library-dialog"].showModal()
 }
 $.library.addEventListener("click", () => void showLibrary().catch(fail))
@@ -1087,8 +1273,16 @@ $["request-pair"].onclick = async () => {
   const button = $["request-pair"], label = $["pair-request-status"]
   button.disabled = true
   try {
-    label.textContent = "Connecting…"
-    const result = await (await request("/api/connect", {method:"POST",headers:{"Content-Type":"application/json","X-Elleson-Connect":"1"},body:"{}"})).json()
+    label.textContent = "Approve this connection on the PC."
+    const pending = await (await postJson("/api/pair-request", {})).json()
+    let result
+    for (let attempt = 0; attempt < 118; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 1000))
+      if (credential) return
+      result = await (await postJson("/api/pair-request/status", pending)).json()
+      if (result.token) break
+    }
+    if (!result?.token) throw new Error("The connection request expired. Try again.")
     credential = result.token; sessionStorage.setItem("elleson-session", credential); localStorage.setItem("elleson-session", credential)
     revision = -1; layout(); await refresh(); await tools.acceptPendingHandoff()
     label.textContent = "Connected"
@@ -1429,14 +1623,14 @@ installDocumentGestures({ stage: $.stage, sheet: $["pdf-sheet"], isActive:()=>cu
   setZoom: value => { zoom = value }, render: renderPage,
   cancelStroke: () => { if (draft) inputDrafts.acknowledge(current.id, draft); draft = null; inkTip.clear(); drawMarks(); if (current) streamInk(current.id,{}) } })
 function canvasPoint(event) {
-  const rect = inkBounds || inkCanvas.getBoundingClientRect()
+  const rect = inkCanvas.getBoundingClientRect()
   return [(event.clientX - rect.left)*viewport.width/rect.width, (event.clientY - rect.top)*viewport.height/rect.height]
 }
 inkCanvas.addEventListener("pointerdown", event => {
   if (!viewport || viewport.page !== page || event.button !== 0 || draft || $.stage.dataset.navigating==='true') return
   if(event.pointerType==='touch'&&(drawingSettings.stylusOnly||event.width>48||event.height>48))return
   const actionMode=drawingSettings.eraser?'erase':mode
-  inkBounds=inkCanvas.getBoundingClientRect()
+
   const position = canvasPoint(event)
   const at = viewport.convertToPdfPoint(...position)
   if (pendingStamp && actionMode === 'text') {
@@ -1449,12 +1643,19 @@ inkCanvas.addEventListener("pointerdown", event => {
     return
   }
   if (actionMode === "signature") {
-    const width = Math.min(Number($["signature-width"].value) * viewport.scale, viewport.width - position[0])
-    const height = Math.min(width / 3, viewport.height - position[1])
-    if (width < 10 || height < 5) return
-    const strokes = signatureStrokes.map(stroke => stroke.map(point =>
-      viewport.convertToPdfPoint(position[0] + point[0] * width, position[1] + point[1] * height)))
-    void edit({ kind: "signature", page, strokes, color: $["ink-color"].value, width: Number($["ink-width"].value) }).then(() => setMode("read"))
+    const docId = current.id, number = page, frame = viewport
+    const strokes = structuredClone(signatureStrokes)
+    const color = $['ink-color'].value, thickness = Number($['ink-width'].value)
+    const size = Math.min(Number($['signature-width'].value)*frame.scale, frame.width, frame.height*3)
+    previewSignature({sheet:$['pdf-sheet'], strokes,color,thickness,x:position[0]/frame.width,y:position[1]/frame.height,
+      width:size/frame.width,height:size/(3*frame.height),fail,async commit(box) {
+        if(current?.id!==docId || page!==number) throw Error('Return to the signing page.')
+        const points=strokes.map(stroke=>stroke.map(([x,y])=>frame.convertToPdfPoint(
+          (box.x+x*box.width)*frame.width,(box.y+y*box.height)*frame.height)))
+        const accepted=await edit({kind:'signature',page:number,strokes:points,color,width:thickness})
+        if(!accepted)throw Error('Signature could not be placed. Try again.')
+        setMode('read')
+      }})
   } else if (actionMode === "text") {
     const next = viewport.convertToPdfPoint(position[0] + 1, position[1])
     const angle = Math.atan2(next[1] - at[1], next[0] - at[0]) * 180 / Math.PI
@@ -1581,20 +1782,38 @@ $["saved-signatures"].addEventListener("change", () => {
   drawSignature()
 })
 const signatureName=document.createElement('input');signatureName.id='signature-name';signatureName.placeholder='Signature or initials name';signatureName.setAttribute('aria-label','Signature name');$['saved-signatures'].after(signatureName)
-const removeSignature=document.createElement('button');removeSignature.type='button';removeSignature.textContent='Remove saved signature';signatureName.after(removeSignature);removeSignature.onclick=()=>{const index=Number($['saved-signatures'].value);if($['saved-signatures'].value===''||!savedSignatures[index])return;savedSignatures.splice(index,1);localStorage.setItem('elleson-signatures',JSON.stringify(savedSignatures));$['saved-signatures'].replaceChildren(new Option('New signature',''),...savedSignatures.map((item,index)=>new Option(item.name,index)))}
+const removeSignature=document.createElement('button');removeSignature.type='button';removeSignature.textContent='Remove saved signature';signatureName.after(removeSignature);removeSignature.onclick=()=>{const index=Number($['saved-signatures'].value);if($['saved-signatures'].value===''||!savedSignatures[index])return;savedSignatures.splice(index,1);documentStorage.setItem('elleson-signatures',JSON.stringify(savedSignatures));$['saved-signatures'].replaceChildren(new Option('New signature',''),...savedSignatures.map((item,index)=>new Option(item.name,index)))}
 $["signature-insert"].addEventListener("click", async () => {
   if (!signatureStrokes.length) return
   let remembered = true
   if ($["signature-remember"].checked) {
     const next = [...savedSignatures, { name: signatureName.value.trim().slice(0,80)||new Date().toLocaleString(), strokes: structuredClone(signatureStrokes) }]
     try {
-      localStorage.setItem("elleson-signatures", JSON.stringify(next))
+      documentStorage.setItem("elleson-signatures", JSON.stringify(next))
       savedSignatures = next
     } catch { remembered = false }
   }
   $["signature-dialog"].close()
   if(current?.lines){
-    try{await suiteApp.pending();const doc=current,page=[...$['word-sheet'].querySelectorAll('section.docx')].find(p=>p.getBoundingClientRect().bottom>$.stage.getBoundingClientRect().top+40),paragraph=page?.querySelector('[data-word-source-index]');if(!paragraph)throw Error('Choose a page containing text.');const width=Math.min(240,page.offsetWidth-64),height=100,ink={width,height,strokes:signatureStrokes.map(points=>({color:$['ink-color'].value,width:Number($['ink-width'].value),points:points.map(([x,y])=>[x*width,y*height])}))},png=(await import('./ink-vectors.mjs')).inkPng(ink);await request('/api/word-image/'+doc.id,{method:'POST',headers:{'Content-Type':'application/json','X-Operation-Id':editId(),'X-Document-Version':String(doc.contentVersion),'X-Paragraph-Index':paragraph.dataset.wordSourceIndex},body:JSON.stringify({png,position:{x:32,y:32,width,height,ink}})});revision=-1;await refresh();status('Signature inserted. Tap it to move or resize.')}catch(error){fail(error)}
+    try {
+      await suiteApp.pending()
+      const doc=current
+      const sheet=[...$['word-sheet'].querySelectorAll('section.docx')].find(el=>el.getBoundingClientRect().bottom>$.stage.getBoundingClientRect().top+40)
+      const paragraph=sheet?.querySelector('[data-word-source-index]')
+      if(!paragraph)throw Error('Choose a page containing text.')
+      const strokes=structuredClone(signatureStrokes), color=$['ink-color'].value, thickness=Number($['ink-width'].value)
+      const size=Math.min(Number($['signature-width'].value),sheet.offsetWidth)
+      previewSignature({sheet,strokes,color,thickness,x:.08,y:.08,width:size/sheet.offsetWidth,height:size/(3*sheet.offsetHeight),fail,
+        async commit(box) {
+          if(current?.id!==doc.id)throw Error('Return to the signing document.')
+          const width=box.width*sheet.offsetWidth,height=box.height*sheet.offsetHeight
+          const ink={width,height,strokes:strokes.map(points=>({color,width:thickness,points:points.map(([x,y])=>[x*width,y*height])}))}
+          const png=(await import('./ink-vectors.mjs')).inkPng(ink)
+          await request('/api/word-image/'+doc.id,{method:'POST',headers:{'Content-Type':'application/json','X-Operation-Id':editId(),'X-Document-Version':String(doc.contentVersion),'X-Paragraph-Index':paragraph.dataset.wordSourceIndex},body:JSON.stringify({png,position:{x:box.x*sheet.offsetWidth,y:box.y*sheet.offsetHeight,width,height,ink}})})
+          revision=-1
+          await refresh()
+        }})
+    } catch(error){fail(error)}
   }else setMode("signature")
   if (!remembered) status("Tap to place the signature. Device storage could not retain it for reuse.")
 })
@@ -1652,7 +1871,7 @@ installWheelZoom({stage:$.stage,sheet:$['pdf-sheet'],isActive:()=>current?.exten
   getZoom:()=>zoom,setZoom:value=>{zoom=value},render:renderPage,fail})
 installWheelZoom({stage:$.stage,sheet:$['word-sheet'],isActive:()=>Boolean(current?.lines)&&!wordInk.drawing,
   getZoom:wordPageSizing.getZoom,setZoom:wordPageSizing.setZoom,render:wordPageSizing.fit,fail})
-const sharedView = installSharedView({isDrawing:()=>Boolean(draft)||wordInk.drawing||editingWord,stage:$.stage, get:()=>current, request, editId,
+const sharedView = installSharedView({isDrawing:()=>Boolean(draft)||wordInk.drawing||editingWord,stage:$.stage, get:()=>current, request, editId, getParagraph:()=>selectedWordIndex,
   getReading:()=>readingView.active, pages:()=>readingView.active?readingView.pages():current?.extension==='pdf'?[$['pdf-sheet']]:[...$['word-sheet'].querySelectorAll('section.docx')],
   getPage:()=>page, getZoom:()=>readingView.active?readingView.getZoom():current?.extension==='pdf'?zoom:wordPageSizing.getZoom(),
   async setView(value){if(current?.extension==='pdf'){if(value.reading)return readingView.setView(value);if(readingView.active)await readingView.close();if(!pdf)return false;if(page!==value.page||Math.abs(zoom-value.zoom)>1e-6){page=Math.min(pdf.numPages,value.page);zoom=value.zoom;await renderPage()}}else{if(!$['word-sheet'].querySelector('section.docx'))return false;if(Math.abs(wordPageSizing.getZoom()-value.zoom)>1e-6)wordPageSizing.setZoom(value.zoom)}return true}
@@ -1674,7 +1893,30 @@ installUpdater()
 installCompareView({pdfjs,app:{get:()=>({current}),request,pending:()=>pendingEdit,status}})
 layout()
 status(credential ? "Ready" : "Connecting to the PC…")
-if (!credential) setTimeout(() => { if (!credential) $["request-pair"].click() }, 600)
+if (!credential && role !== "guest") setTimeout(() => { if (!credential) $["request-pair"].click() }, 600)
+if (invitation) {
+  sessionStorage.removeItem("elleson-collaboration")
+  const join = document.createElement("dialog")
+  join.className = "document-suite"
+  join.innerHTML = '<h2>Join live collaboration</h2><form><label>Display name <input name="displayName" maxlength="60" required></label><p role="status"></p><button class="primary">Join document</button></form>'
+  document.body.append(join)
+  join.addEventListener("cancel", event => event.preventDefault())
+  join.querySelector("form").onsubmit = async event => {
+    event.preventDefault()
+    event.submitter.disabled = true
+    try {
+      const result = await (await postJson("/api/collab-join", { invite: invitation, name: event.currentTarget.elements.namedItem("displayName").value.trim() })).json()
+      credential = result.token
+      sessionStorage.setItem("elleson-collaboration", credential)
+      history.replaceState(null, "", "/")
+      join.close()
+      revision = -1
+      await refresh()
+    } catch (error) { join.querySelector("[role=status]").textContent = error.message }
+    finally { event.submitter.disabled = false }
+  }
+  join.showModal()
+}
 window.addEventListener("elleson-open-file", event => void (async () => {
   if (location.hostname !== "appassets.androidplatform.net") return
   document.activeElement?.blur()
@@ -1708,10 +1950,13 @@ const suiteApp={get:()=>current,role:()=>role,viewport:()=>viewport,page:()=>pag
 const documentSuite=installDocumentSuite(suiteApp)
 installPartialEraser({...suiteApp,pending:async()=>{await suiteApp.pending();if(current?.lines)await wordInk.pending()}})
 const drawingSuite=installDrawingSuite(suiteApp,documentSuite)
-installCompanion(suiteApp,documentSuite,drawingSuite)
+installPdfFeatures(suiteApp,documentSuite,tools.download)
+installCollaboration(suiteApp,documentSuite)
+installCompanion({...suiteApp, selectedWord:()=>selectedWordIndex},documentSuite,drawingSuite)
 installTapTools(suiteApp)
 installWorkState({get:()=>current,mode:()=>mode})
-const conflictHistory=installConflictHistory({get:()=>current,apply:edit,fail})
+document.body.append($.delivery)
+const conflictHistory=installConflictHistory({get:()=>current,apply:edit,fail,storage:documentStorage})
 restyleMoreMenu()
 
 installQuickPen()

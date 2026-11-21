@@ -1,8 +1,9 @@
-ELLESON DOCS 0.4.21
+ELLESON DOCS 0.4.23
 
-Elleson Docs 0.4.21. See resources/app/UPDATE-STATUS.md for features and verification.
-New: Convert files, New documents, scanner filters, drawing Done, continuous
-reading, password-protected PDF copies, Save As, Rename, and easier pairing.
+Elleson Docs 0.4.23. See resources/app/UPDATE-STATUS.md for features and verification.
+New: library search and tags, PDF form design and autofill, privacy cleanup
+and compression, phone capture into shared documents, expanded Word tools
+and live collaboration over trusted local Wi-Fi.
 More contains additional saving, scanning, printing and document actions.
 
 WINDOWS
@@ -14,10 +15,10 @@ Save a copy exports separately. External file changes require a choice.
 Ctrl+S saves; Ctrl+Shift+S saves a copy.
 
 ANDROID AND LIVE EDITING
-Install Elleson-Docs-Android-0.4.21.apk on Android 8 or newer.
+Install Elleson-Docs-Android-0.4.23.apk on Android 8 or newer.
 Open documents on phone works independently for PDF and DOCX.
 For live editing, keep Windows open and use the same trusted Wi-Fi.
-Open the phone app: it finds the PC and connects without codes or approval.
+Open the phone app, select the PC and approve the request on Windows.
 If discovery is unavailable, enter the PC address shown under Connect phone.
 Continue on PC transfers the current edited phone document after connection.
 Continue on phone transfers the PC's current document to standalone Android.
@@ -50,7 +51,9 @@ UPDATES
 More > Check for updates shows published releases and downloads verified files.
 Android checks the checksum and installed app signature, then opens Android's
 installation confirmation. Windows downloads a verified ZIP for extraction.
-The updater requires a newer release with matching download assets on GitHub.
+Android can also discover an update staged on the connected PC. When a
+GitHub repository is private, download its assets while signed in or use
+the paired PC's Wi-Fi update.
 
 SCANS, FILES AND BACKUP
 Scan document captures multiple pages into one PDF with crop corners,

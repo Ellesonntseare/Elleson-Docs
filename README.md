@@ -1,6 +1,6 @@
 # Elleson Docs
 
-The current source is **0.4.11**. Elleson Docs is a Windows and Android document viewer and editor with standalone phone use and a shared workspace over local Wi-Fi. Connected devices share document edits, drawings, page position, scrolling and zoom. Other open tabs retain their own unsaved work. See [UPDATE-STATUS.md](UPDATE-STATUS.md) for release details and validation limits.
+The current source is **0.4.23**. Elleson Docs is a Windows and Android document viewer and editor with standalone phone use and a shared workspace over local Wi-Fi. Connected devices share document edits, drawings, page position, scrolling and zoom. Other open tabs retain their own unsaved work. See [UPDATE-STATUS.md](UPDATE-STATUS.md) for release details and validation limits.
 
 More includes Pages, Combine documents, Drawing tools, Recovery history and Phone companion. The scanner supports multiple photos, automatic page edges, perspective correction, thumbnails and page ordering. Open pictures as working PDFs and choose Save as PDF to export them. Pages can reorder, rotate, duplicate and remove PDF pages together while retaining app-added editable ink. Drawing tools select several drawings, change their colour, move, resize, duplicate or delete them, and add shapes to Word and PDF. Recovery history previews checkpoints before restoring them. Word files in Combine documents require the Windows renderer; merged form entries become printed content in the new PDF.
 
@@ -18,13 +18,19 @@ More includes Pages, Combine documents, Drawing tools, Recovery history and Phon
 
 ## Phone and PC
 
-For live editing, run Windows and put both devices on the same trusted Wi-Fi. Choose Connect phone on Windows, enter its address in Android, and pair using the temporary code. The phone is remembered for up to 30 days unless disconnected. Windows tries to keep the same local port across restarts. If that port is occupied, it uses another port and shows the new address.
+Use **More → Live collaboration** on Windows to create one-use invite links for the active PDF or DOCX. Collaborators open the link in a browser on the same trusted LAN and enter a display name. They can work at their own page and see participant presence and authored edits. Separate form fields and non-overlapping Word changes can be edited in parallel. Overlapping edits prompt for a choice. The host can remove people or end sharing. Whole-document undo and redo are available after sharing ends. Invites expire after ten minutes and guest sessions expire after 24 hours. The LAN connection uses HTTP.
+
+For phone pairing, run Windows and connect both devices to the same trusted Wi-Fi. Select the PC in the Android app and approve the request on Windows. Enter the address from **Connect phone** when automatic discovery is unavailable. The phone is remembered for up to 30 days unless disconnected. Windows tries to keep the same local port across restarts. If that port is occupied, it uses another port and shows the new address.
+
+On a paired phone, use **Phone companion** to scan and append pages to the active PC PDF, insert a camera photo after a selected Word paragraph, or place a handwritten signature in the shared document.
 
 On Android, Open documents on phone works independently. Open with and Share accept PDF, DOCX and supported pictures from other applications. Continue on PC packages the current edited document and takes you to the connection screen. After connecting, it opens the edited file on the PC with the requested page and zoom. Continue on phone sends the paired document into the Android standalone workspace. Handoffs create a separate local copy; subsequent independent edits are not automatically merged into the old PC tab.
 
 Connection status distinguishes connected, reconnecting and offline states and shows pending changes. Completed editing operations are retained in device storage during network loss and retried with the same operation ID. Conflicting PDF-field or Word-paragraph entries require an explicit keep-mine/use-latest choice. If an older operation cannot apply to a changed document, the app retains it until reviewed or explicitly discarded. A disconnected page must reconnect before it can reload network-served viewer assets.
 
 ## Files and saving
+
+**Files** searches filenames, tags and text in the latest saved versions, including existing searchable PDF text and form answers. Use tag, file type and update-date filters. PDF results can jump to the matching page. Content indexing covers up to 200 pages per PDF.
 
 Tabs retain independent edits and undo history while switching. The whole workspace recovers on restart. Up to 12 tabs are allowed, with additional memory limits. Closing an unsaved tab asks for confirmation. Save writes back to a tracked original file when access is available. Windows checks the original file's hash and asks before overwriting an external change, and writes through a temporary file. Android checks its tracked content URI and falls back to the system Save a copy picker when direct access is unavailable. Save a copy always creates a separate file. Ctrl+S invokes Save; Ctrl+Shift+S invokes Save a copy.
 
@@ -33,6 +39,12 @@ Files provides recent documents, pins, saved versions, deletion and version comp
 The library keeps a recovery index. Damaged indexes and missing files produce recovery guidance. PC session Undo holds up to 50 changes within an estimated 100 MB history budget and resets on restart. Android retains up to 30 changes in its local session. Saved-version limits do not include live tab histories. Clearing Android app data removes the app's local workspace and library; export important files separately.
 
 ## Scanning and interface
+
+**More → PDF form tools** reviews required fields, jumps to missing answers, previews profile autofill, and creates or edits PDF fields. **Suggest fields from this page** uses existing text or local OCR to suggest positions from recognized labels and blanks. Review suggestions before applying them. Date fields use `YYYY-MM-DD` in Elleson Docs. Move and resize is available for fields with one widget.
+
+**More → Privacy Inspector / Compress PDF** checks selected categories, saves a separate clean copy, and rechecks the result. It can also look for a specific redacted phrase in extractable page text. Review visible text and image pixels separately. PDF optimization retains the page objects and can optionally resize supported large JPEGs. Rewriting a PDF can invalidate certificate signatures.
+
+The Word ribbon offers paragraph styles, heading navigation, linked contents lists, hyperlinks, footnotes, page setup for the selected section, and merging adjacent cells in the same table row.
 
 Scan document captures up to 30 photos into one PDF. Each page has separate corner coordinates, perspective correction, straightening, and document/receipt/photo processing. Page-edge detection estimates corners from the largest connected paper region and must be checked on low-contrast or cluttered images. Document and receipt modes reduce uneven background brightness. OCR runs locally in English, French and Spanish using bundled language data.
 

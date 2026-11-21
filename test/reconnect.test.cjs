@@ -15,7 +15,7 @@ test("phone queues edits through connection loss and resolves conflicting answer
     const pc = await browser.newPage(), phone = await browser.newPage({ viewport: { width: 390, height: 780 } })
     const pairing = await (await fetch(host.address + "/api/pairing", { method: "POST", headers, body: "{}" })).json()
     await pc.goto(host.address + "/#owner=" + host.owner)
-    await phone.goto(host.address)
+    await require('./menu-helper.cjs').connectPhone(pc, phone, host.address)
     await phone.getByText("PDF ready", { exact: true }).waitFor()
     await pc.getByText("PDF ready", { exact: true }).waitFor()
     await phone.context().setOffline(true)

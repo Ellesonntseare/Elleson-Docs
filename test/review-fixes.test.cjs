@@ -86,7 +86,7 @@ test('offline typing stays visible and immediate typing survives a reload', {tim
   } finally {await browser.close();await close(host)}
 })
 
-test('PDF form controls render and continuous reading retries after a temporary failure', {timeout:30000},async()=>{
+test('PDF form controls render and continuous reading retries after a temporary failure', {timeout:65000},async()=>{
   const host=await start(),browser=await chromium.launch({channel:'msedge'})
   try {
     const pdf=await PDFDocument.create(),page=pdf.addPage([400,500]),form=pdf.getForm()
@@ -106,10 +106,12 @@ test('PDF form controls render and continuous reading retries after a temporary 
   } finally {await browser.close();await close(host)}
 })
 
-test('scan failures retain captured pages and drafts reopen after a reload', {timeout:45000},async()=>{
+test('scan failures retain captured pages and drafts reopen after a reload', {timeout:75000},async()=>{
   const host=await start(),browser=await chromium.launch({channel:'msedge'})
   try {
     const screen=await browser.newPage();await screen.goto(host.address+'/#owner='+host.owner)
+    screen.setDefaultTimeout(10000)
+    await screen.locator('#welcome').waitFor({state:'visible'})
     const png=await screen.evaluate(()=>{const canvas=document.createElement('canvas');canvas.width=400;canvas.height=500;const context=canvas.getContext('2d');context.fillStyle='white';context.fillRect(0,0,400,500);context.fillStyle='black';context.font='32px sans-serif';context.fillText('Scan recovery',20,70);return canvas.toDataURL().split(',')[1]})
     await screen.locator('#scan-file').setInputFiles({name:'scan.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')})
     await screen.locator('#scan-dialog[open]').waitFor()

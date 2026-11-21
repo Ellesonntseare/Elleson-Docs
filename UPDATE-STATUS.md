@@ -1,3 +1,13 @@
+# Elleson Docs 0.4.23
+
+- Files searches saved PDF and Word content, with tags and file filters.
+- PDF form tools support field creation, required-field review, confirmed profile autofill and OCR-based field suggestions on scanned pages.
+- Privacy Inspector prepares and rechecks clean copies. PDF optimization preserves searchable text and interactive elements, with optional resizing of supported JPEGs.
+- Paired phones can append scans to the active PC PDF, add camera photos to Word, or place signatures in shared documents. First-time pairing requires PC approval.
+- Word adds paragraph styles, a heading outline, linked contents lists, hyperlinks, footnotes, section page settings and adjacent-cell merging.
+- Live collaboration supports named editors on a trusted LAN, independent navigation, activity history and explicit edit conflicts.
+- Local verification covered Electron startup, standalone Android web assets and paired browser workflows. Physical Android camera and Wi-Fi operation still need device validation.
+
 # Elleson Docs 0.4.21
 
 - Windows startup shows a workspace loading window; launching again shows and restores the existing window. Startup errors no longer silently leave a destroyed-window instance running. Hidden-window reopening passed an Electron integration check.

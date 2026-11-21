@@ -40,7 +40,7 @@ test('phone ink paints on PC before pen-up without polling, and keeps document c
     const pdf=await PDFDocument.create();pdf.addPage([400,600]);await host.open('Live signing.pdf',await pdf.save())
     const pc=await browser.newPage(),phone=await browser.newPage({viewport:{width:412,height:915},isMobile:true,hasTouch:true})
     const errors=[];for(const page of [pc,phone])page.on('pageerror',e=>errors.push(e.message))
-    await pc.goto(host.address+'/#owner='+host.owner);await phone.goto(host.address)
+    await pc.goto(host.address+'/#owner='+host.owner);await require('./menu-helper.cjs').connectPhone(pc, phone, host.address)
     for(const page of [pc,phone])await page.getByText('PDF ready',{exact:true}).waitFor()
     await clickTool(phone,phone.locator('#suite-companion'))
     await phone.locator('#companion-workspace').getByRole('button',{name:'Sign on page',exact:true}).click()

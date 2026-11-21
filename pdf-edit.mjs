@@ -47,7 +47,7 @@ export function extract(bytes, index, ocr = []) {
     ]
   }))
   for (const run of ocr) result.push({
-    id: run.id, text: run.text, font: "Helvetica · estimated scan font", size: run.size,
+    id: run.id, text: run.text, font: "Helvetica · estimated scan font", size: run.size, confidence: run.confidence,
     quad: [pointTransform([run.rect[0], run.rect[1]], inverse), pointTransform([run.rect[2], run.rect[3]], inverse)]
   })
   structured.destroy()

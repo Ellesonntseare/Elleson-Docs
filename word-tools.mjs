@@ -1,4 +1,6 @@
 import { validFormat, applyFormatting } from "./word-format.mjs"
+import { applyParagraphStyle } from "./word-structure.mjs"
+import { isWordStructureAction, editWordStructure } from "./word-advanced-structure.mjs"
 
 const directText = paragraph => Array.from(paragraph.getElementsByTagNameNS(paragraph.namespaceURI, "t")).filter(node => {
   let owner = node.parentNode
@@ -20,7 +22,11 @@ export function editWord(document, archive, edit, Parser, Serializer, fromBytes,
   const namespace = document.documentElement.namespaceURI
   const p = document.getElementsByTagNameNS(namespace, "p")[edit.index]
   if (!p) throw new Error("Select a paragraph again.")
-  if (edit.action === "range") {
+  if (edit.action === "paragraph-style") {
+    applyParagraphStyle(p, archive, edit.style, Parser, Serializer, fromBytes, toBytes)
+  } else if (isWordStructureAction(edit.action)) {
+    editWordStructure(p, archive, edit, Parser, Serializer, fromBytes, toBytes)
+  } else if (edit.action === "range") {
     if (!validFormat(edit.format) || !Number.isInteger(edit.start) || !Number.isInteger(edit.end) || edit.start < 0 || edit.end <= edit.start) throw new Error("Select some text and choose valid formatting.")
     const nodes = directText(p)
     if (edit.end > nodes.reduce((sum, node) => sum + node.textContent.length, 0)) throw new Error("The selected text changed.")

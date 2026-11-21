@@ -28,7 +28,7 @@ export function installDrawingSuite(app,hub){
  button('Lasso drawings',()=>begin('lasso'),tools).id='suite-lasso-ink'
  button('Select drawings',()=>begin('select'),tools).id='suite-select-ink'
  for(const kind of ['line','arrow','rectangle','ellipse'])button(kind[0].toUpperCase()+kind.slice(1),()=>begin(kind),tools)
- button('Highlighter',()=>{if(app.get()?.extension==='pdf'){panel.close();action=null;$('stage').classList.remove('suite-drawing-active');app.setMode('highlight')}else begin('highlighter')},tools)
+ button('Highlighter',()=>{if(app.get()?.extension==='pdf'){panel.close();action=null;$('stage').classList.remove('suite-drawing-active');app.setMode('highlight')}else begin('highlighter')},tools).id='suite-highlighter'
  async function transform(type,extra={}){
    if(!selection.length&&!wordSelection.length)throw Error('Select drawings first.')
    await app.pending();const doc=app.get();if(doc.id!==selectedDoc)throw Error('The active document changed. Select the drawings again.')

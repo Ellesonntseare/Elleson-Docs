@@ -1,9 +1,15 @@
 // Share document coordinates, never device pixels. Remote movement must not echo.
-export function installSharedView({stage,get,request,editId,pages,getPage,getZoom,setView,getReading=()=>false,isDrawing=()=>false}) {
+export function installSharedView({stage,get,request,editId,pages,getPage,getZoom,setView,getParagraph=()=>null,getReading=()=>false,isDrawing=()=>false}) {
   const client=editId()
   let pending=null,seen=0,applying=false,suppress=0,activeUntil=0,last='',sending=false
   const enabled=()=>location.hostname!=='appassets.androidplatform.net' && get()
-  const intent=()=>{if(!applying){pending=null;activeUntil=Date.now()+1200;suppress=0}}
+  const intent = event => {
+    // Approving a phone or closing a dialog does not take control of the shared view.
+    if (applying || event.target instanceof Element && event.target.closest("dialog")) return
+    pending = null
+    activeUntil = Date.now() + 1200
+    suppress = 0
+  }
   stage.addEventListener('wheel',intent,{passive:true})
   document.addEventListener('pointerdown',intent,true)
   document.addEventListener('pointerup',intent,true)
@@ -17,7 +23,7 @@ export function installSharedView({stage,get,request,editId,pages,getPage,getZoo
     let index=0,distance=Infinity
     list.forEach((p,i)=>{const r=p.getBoundingClientRect(),d=Math.max(r.top-cy,cy-r.bottom,0);if(d<distance){distance=d;index=i}})
     const r=list[index].getBoundingClientRect(),clamp=v=>Math.max(0,Math.min(1,v))
-    return {document:get().id,page:get().extension==='pdf'&&!getReading()?getPage():index+1,x:clamp((cx-r.left)/r.width),y:clamp((cy-r.top)/r.height),zoom:getZoom(),reading:getReading(),color:document.getElementById('ink-color').value,thickness:Number(document.getElementById('ink-width').value)}
+    return {document:get().id,page:get().extension==='pdf'&&!getReading()?getPage():index+1,x:clamp((cx-r.left)/r.width),y:clamp((cy-r.top)/r.height),zoom:getZoom(),paragraph:getParagraph(),reading:getReading(),color:document.getElementById('ink-color').value,thickness:Number(document.getElementById('ink-width').value)}
   }
   async function tick(){
     if(!enabled()||applying||isDrawing()||stage.dataset.navigating==='true')return

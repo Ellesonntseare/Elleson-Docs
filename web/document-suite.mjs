@@ -126,5 +126,5 @@ export function installDocumentSuite(app){
     checkpointBusy=true
     void app.pending().then(()=>app.request('/api/checkpoint/'+doc.id,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'})).then(()=>{checkpointKey=key}).catch(()=>{}).finally(()=>{checkpointBusy=false})
   },60000)
-  return {tools,button}
+  return {tools,button,dialog,message,actions}
 }

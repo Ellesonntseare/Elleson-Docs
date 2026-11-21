@@ -17,6 +17,7 @@
     <div class="brand"><img src="/logo.png" alt=""><strong>Elleson Docs</strong></div>
     <div id="file-title" class="file-title"></div>
     <span id="save-state" role="status"></span>
+    <span id="delivery" hidden><span id="delivery-state" role="status"></span> <button id="retry-delivery" hidden>Retry</button></span>
     <span id="recovery-warning" role="alert" hidden></span>
     <div class="actions">
       <button id="open" hidden>Open file</button>
@@ -101,7 +102,7 @@
       <section id="pair-form" class="welcome" hidden>
         <img src="/logo.png" alt="">
         <h1>Connect to your PC</h1>
-        <p>Connecting to the PC on your Wi-Fi. No pairing code is needed.</p>
+        <p>Connect over the same Wi-Fi and approve the request on your PC.</p>
         <button id="request-pair" class="primary">Connect to this PC</button><p id="pair-request-status" role="status"></p>
         <form id="pair" class="pair-form" hidden>
           <label>Pairing code <input id="code" required minlength="8" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false"></label>
@@ -122,7 +123,7 @@
   <footer class="status"><span id="status" role="status">Starting Elleson Docs…</span><span id="connection"></span></footer>
   <dialog id="pair-dialog">
     <h2>Connect phone</h2>
-    <p>Open Elleson Docs on your phone using the same Wi-Fi. It finds this PC and connects without codes. If discovery is unavailable, enter one of the addresses below.</p>
+    <p>Open Elleson Docs on your phone using the same Wi-Fi, then approve its request here. If discovery is unavailable, enter one of the addresses below.</p>
     <div id="addresses" class="addresses"></div>
     <p class="code-label" hidden><strong id="pair-code"></strong></p>
     <div class="actions">

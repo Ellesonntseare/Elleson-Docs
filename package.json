@@ -1,6 +1,6 @@
 {
   "name": "elleson-docs",
-  "version": "0.4.21",
+  "version": "0.4.23",
   "description": "Windows and Android document viewer and editor with live two-way editing",
   "main": "main.cjs",
   "scripts": {

@@ -520,7 +520,7 @@ export function installTools(app) {
   })
   async function addScanFile(file) { await scanReady; if (!$("scan-dialog").open && !scans.length && recoveredScan?.scans?.length) { scans = recoveredScan.scans; scanIndex = recoveredScan.scanIndex || 0; recoveredScan = null } if (!$("scan-dialog").open) {replacingScan=false} if (scans.length >= 30&&!replacingScan) throw new Error("Keep at most 30 scan pages."); const { detectCorners } = await import("./scan-runtime.mjs"); app.status("Detecting page edges…"); const item={file,angle:0,corners:await detectCorners(file),filter:'document'};if(replacingScan&&scans[scanIndex])scans[scanIndex]=item;else{scans.push(item);scanIndex=scans.length-1}replacingScan=false;await showScan() }
   installWordRibbon({...app,selection:()=>wordSelection})
-  return { updated: updateSelection, inkAt, selectInk, receiveHandoff, acceptPendingHandoff,
+  return { updated: updateSelection, inkAt, selectInk, receiveHandoff, acceptPendingHandoff, download,
     selection: () => wordSelection,
     splitParagraph: async (index, offset) => { await wordAction({ action: "split", index, offset }); app.selectWord(index + 1); await app.renderWord(); $("word-sheet").querySelector('[data-word-index="' + (index + 1) + '"]')?.focus() },
     addScan: addScanFile,

@@ -9,10 +9,27 @@ import { extract, replace, organize, scanImage, imageInfo } from "./pdf-edit.mjs
 import { applyFormatting, ensureListParts, insertTable, insertImage, validFormat, changeWordInk, validInkPosition, changeWordInkBatch } from "./word-format.mjs"
 import { diffChars } from "diff"
 import { editWord } from "./word-tools.mjs"
+import { nonStructuralWordAction } from "./word-advanced-structure.mjs"
+import { paragraphStyles, standardParagraphStyles } from "./word-structure.mjs"
+import { createLibrarySearch, normalizedTags } from "./library-search.mjs"
+import { inspectForm, authorForm } from "./form-authoring.mjs"
+import { inspectPrivacy, cleanPdf, optimizePdf } from "./pdf-copy-tools.mjs"
 import { changeMarks } from "./mark-tools.mjs"
 import { review, reviewList, image as changeImage, images, combineEditable } from "./pdf-tools.mjs"
 
 const namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+function readWordLines(document) {
+  const namespace = document.documentElement.namespaceURI
+  return Array.from(document.getElementsByTagNameNS(namespace, "p"), paragraph => {
+    const nodes = Array.from(paragraph.getElementsByTagNameNS(namespace, "t")).filter(node => {
+      let owner = node.parentNode
+      while (owner && owner.localName !== "p") owner = owner.parentNode
+      return owner === paragraph
+    })
+    const style = paragraph.getElementsByTagNameNS(namespace, "pStyle")[0]?.getAttributeNS(namespace, "val") || ""
+    return { text: nodes.map(node => node.textContent).join(""), editable: nodes.length > 0, style }
+  })
+}
 const capture = file => ({
   bytes: file.bytes, marks: structuredClone(file.marks), fields: { ...file.fields },
   wordEdits: { ...file.wordEdits }, wordFormats: structuredClone(file.wordFormats || {}), lines: structuredClone(file.lines),
@@ -20,6 +37,7 @@ const capture = file => ({
 })
 
 export async function install() {
+  const searchLibrary = createLibrarySearch()
   const database = await new Promise((resolve, reject) => {
     const request = indexedDB.open("elleson-docs", 1)
     request.onupgradeneeded = () => request.result.createObjectStore("documents")
@@ -90,8 +108,7 @@ export async function install() {
     return { archive, document }
   }
   function refreshWordLines(){
-    const {document}=wordXml(),ns=document.documentElement.namespaceURI
-    file.lines=Array.from(document.getElementsByTagNameNS(ns,'p'),paragraph=>({text:Array.from(paragraph.getElementsByTagNameNS(ns,'t')).filter(node=>{let p=node.parentNode;while(p&&p.localName!=='p')p=p.parentNode;return p===paragraph}).map(node=>node.textContent).join(''),editable:paragraph.getElementsByTagNameNS(ns,'t').length>0,style:''}))
+    file.lines = readWordLines(wordXml().document)
   }
   async function source(table, image) {
     if (file.extension !== "docx" || !Object.keys(file.wordEdits).length && !Object.keys(file.wordFormats || {}).length && !table && !image) return file.bytes
@@ -180,11 +197,22 @@ export async function install() {
       if(file?.id!==parts[2])throw Error('The open document changed.')
       recordVersion(file,await exported(false));revision++;await persist();return Response.json(snapshot())
     }
+    if (action === "library-search") {
+      const records = library.map(record => ({ ...record, latest: record.versions.at(-1) }))
+      return Response.json(await searchLibrary(records, async (id, version) =>
+        library.find(item => item.id === id)?.versions.find(item => item.id === version), url.searchParams.get("q")))
+    }
     if (action === "library") {
       const record = library.find(record => record.id === parts[2])
       if (!parts[2]) return Response.json(library.map(({ versions, ...record }) => ({ ...record, versionCount: versions.length }))
         .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.updated - a.updated))
       if (!record) throw new Error("Saved document not found.")
+      if (parts[3] === "tags" && options.method === "POST") {
+        const previous = record.tags
+        record.tags = normalizedTags(body.tags)
+        try { await persist() } catch (error) { record.tags = previous; throw error }
+        return new Response(null, { status: 204 })
+      }
       if(parts[3] === "preview") {
         const version=record.versions.find(version=>version.id===parts[4]);if(!version)throw Error('Saved version not found.')
         return new Response(version.bytes,{headers:{'Content-Type':/\.pdf$/i.test(version.filename)?'application/pdf':'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}})
@@ -269,10 +297,7 @@ export async function install() {
         } })
         if (!archive["word/document.xml"]) throw new Error("This is not a valid DOCX file.")
         const xml = new DOMParser().parseFromString(strFromU8(archive["word/document.xml"]), "application/xml")
-        next.lines = Array.from(xml.getElementsByTagNameNS(xml.documentElement.namespaceURI, "p"), paragraph => {
-          const nodes = Array.from(paragraph.getElementsByTagNameNS(xml.documentElement.namespaceURI, "t")).filter(node => { let owner = node.parentNode; while (owner && owner.localName !== "p") owner = owner.parentNode; return owner === paragraph })
-          return { text: nodes.map(node => node.textContent).join(""), style: "", editable: nodes.length > 0 }
-        })
+        next.lines = readWordLines(xml)
       }
       file = next
       if (!options.libraryId) recordVersion(file, bytes)
@@ -301,6 +326,22 @@ export async function install() {
       revision++; await persist(); return Response.json(snapshot())
     }
     if (action === "preview") return new Response(null, { status: 204 })
+    if (action === "word-styles" && file?.id === parts[2] && file.extension === "docx") {
+      const { archive, document } = wordXml()
+      const existing = paragraphStyles(archive, document.documentElement.namespaceURI, DOMParser, strFromU8)
+      return Response.json([...new Map([...standardParagraphStyles, ...existing].map(style => [style.id, style])).values()])
+    }
+    if (action === "form-fields" && file?.id === parts[2] && file.extension === "pdf") {
+      return Response.json(await inspectForm(file.bytes, file.fields))
+    }
+    if (action === "pdf-copy" && file?.id === parts[2] && file.extension === "pdf") {
+      const input = await exported(false)
+      if (body.action === "inspect") return Response.json(inspectPrivacy(input))
+      if (!["clean", "optimize"].includes(body.action)) throw new Error("Choose a copy operation.")
+      const result = body.action === "clean" ? cleanPdf(input, body.categories, body.verifyText) : optimizePdf(input, body.resize === true)
+      const report = { before: result.before, after: result.after, phraseChecked: result.phraseChecked, originalBytes: input.length, bytes: result.bytes.length, changedImages: result.changedImages }
+      return new Response(result.bytes, { headers: { "Content-Type": "application/pdf", "X-Result-Report": JSON.stringify(report) } })
+    }
     if (action === "source") return new Response(await source(), { headers: {
       "Content-Type": file.extension === "pdf" ? "application/pdf" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     } })
@@ -338,11 +379,7 @@ export async function install() {
       file.wordEdits = {}
       file.wordFormats = {}
       if (!position) file.structureVersion = (file.structureVersion || 0) + 1
-      const { document } = wordXml()
-      file.lines = Array.from(document.getElementsByTagNameNS(document.documentElement.namespaceURI, "p"), paragraph => {
-        const nodes = Array.from(paragraph.getElementsByTagNameNS(document.documentElement.namespaceURI, "t")).filter(node => { let owner = node.parentNode; while (owner && owner.localName !== "p") owner = owner.parentNode; return owner === paragraph })
-        return { text: nodes.map(node => node.textContent).join(""), editable: nodes.length > 0, style: "" }
-      })
+      refreshWordLines()
       file.undo.push(before)
       file.redo = []
       file.contentVersion++
@@ -461,6 +498,14 @@ export async function install() {
         Object.assign(file, organize(await exported(false, body.action === "plan"), body.action, body.pages), { marks: body.action === "plan" ? body.pages.flatMap((item,index)=>oldMarks.filter(mark=>mark.page===item.index+1).map(mark=>({...mark,id:body.id+"-"+index+"-"+mark.id,group:mark.group?body.id+"-"+index+"-"+mark.group:undefined,page:index+1}))) : [], fields: {} })
         file.originalFields = fieldValues(await PDFDocument.load(file.bytes))
         file.contentVersion++
+      } else if (body.kind === "form-author" && file.extension === "pdf") {
+        if (body.version !== file.contentVersion) return Response.json({ error: "The PDF changed. Reopen the form tools." }, { status: 409 })
+        const bytes = await authorForm(file.bytes, body.changes, file.fields)
+        if (bytes.length > 40 * 1024 * 1024) throw new Error("The updated PDF exceeds the document size limit.")
+        file.originalFields = fieldValues(await PDFDocument.load(bytes))
+        file.bytes = bytes
+        file.fields = {}
+        file.contentVersion++
       } else if (body.kind === "field") {
         const actual = file.fields[body.name] ?? file.originalFields?.[body.name] ?? ""
         if (Object.hasOwn(body, "before") && !sameValue(actual, body.before)) return Response.json({ error: "This field changed.", actual, code: "EDIT_CONFLICT" }, { status: 409 })
@@ -475,15 +520,14 @@ export async function install() {
       }
       else if (body.kind === "word-tools") {
         if (body.version !== file.contentVersion) throw new Error("The document changed. Select the text again.")
-        file.bytes = await source(); file.wordEdits = {}; file.wordFormats = {}
-        const { document, archive } = wordXml()
+        const archive = unzipSync(await source())
+        const document = new DOMParser().parseFromString(strFromU8(archive["word/document.xml"]), "application/xml")
         editWord(document, archive, body, DOMParser, XMLSerializer, strFromU8, strToU8)
         archive["word/document.xml"] = strToU8(new XMLSerializer().serializeToString(document))
         file.bytes = zipSync(archive)
-        file.lines = Array.from(document.getElementsByTagNameNS(document.documentElement.namespaceURI, "p"), paragraph => {
-          const nodes = Array.from(paragraph.getElementsByTagNameNS(document.documentElement.namespaceURI, "t")).filter(node => { let owner = node.parentNode; while (owner && owner.localName !== "p") owner = owner.parentNode; return owner === paragraph })
-          return { text: nodes.map(node => node.textContent).join(""), editable: nodes.length > 0, style: "" }
-        })
+        file.wordEdits = {}
+        file.wordFormats = {}
+        file.lines = readWordLines(document)
         file.contentVersion++
       }
       else if (body.kind === "word-format") {
@@ -497,11 +541,7 @@ export async function install() {
         file.bytes = await source({ index: body.index, rows: body.rows, columns: body.columns })
         file.wordEdits = {}
         file.wordFormats = {}
-        const { document } = wordXml()
-        file.lines = Array.from(document.getElementsByTagNameNS(document.documentElement.namespaceURI, "p"), paragraph => {
-          const nodes = Array.from(paragraph.getElementsByTagNameNS(document.documentElement.namespaceURI, "t")).filter(node => { let owner = node.parentNode; while (owner && owner.localName !== "p") owner = owner.parentNode; return owner === paragraph })
-          return { text: nodes.map(node => node.textContent).join(""), editable: nodes.length > 0, style: "" }
-        })
+        refreshWordLines()
         file.contentVersion++
       } else if (body.kind === "word") {
         if ((body.structureVersion ?? 0) !== (file.structureVersion || 0)) return Response.json({error:"The paragraph order changed. Your draft is retained for review.",code:"STRUCTURE_CONFLICT"},{status:409})
@@ -526,7 +566,7 @@ export async function install() {
       if (file.undo.length > 30) file.undo.shift()
       file.redo = []
     }
-    if ((["word-table", "history-undo", "history-redo"].includes(body.kind) || body.kind === 'word-tools' && body.action !== 'range') && file.extension === "docx") file.structureVersion = (file.structureVersion || 0) + 1
+    if ((["word-table", "history-undo", "history-redo"].includes(body.kind) || body.kind === 'word-tools' && !nonStructuralWordAction(body.action)) && file.extension === "docx") file.structureVersion = (file.structureVersion || 0) + 1
     file.applied.push(body.id)
     file.changeNumber++
     revision++

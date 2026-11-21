@@ -9,9 +9,13 @@ for(const standalone of [false,true])test((standalone?'Standalone phone':'Connec
     const image=await fs.readFile(path.resolve(__dirname,'../web/logo.png'))
     const bytes=await Packer.toBuffer(new Document({sections:[{children:[new Paragraph('Tap this paragraph'),new Table({width:{size:9000,type:'dxa'},rows:[new TableRow({children:[new TableCell({children:[new Paragraph('LEFT CELL')]}),new TableCell({children:[new Paragraph('RIGHT CELL')]})]})]}),new Paragraph({children:[new ImageRun({data:image,type:'png',transformation:{width:220,height:100}})]}),new Paragraph({children:[new PageBreak()]}),new Paragraph('LAST PAGE VISIBLE')]}]}))
     const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message))
-    await page.goto(standalone?'https://appassets.androidplatform.net/#owner=local':host.address)
-    if(standalone)await page.locator('#welcome').waitFor({state:'visible'})
-    else await page.locator('#welcome').waitFor({state:'visible'}) // no pairing codes or approval
+    if (standalone) await page.goto('https://appassets.androidplatform.net/#owner=local')
+    else {
+      const pc = await browser.newPage()
+      await pc.goto(host.address + '/#owner=' + host.owner)
+      await require('./menu-helper.cjs').connectPhone(pc, page, host.address)
+    }
+    await page.locator('#welcome').waitFor({state:'visible'})
     await page.locator('#file').setInputFiles({name:'Full pages.docx',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',buffer:bytes})
     const paragraph=page.locator('#word-sheet [data-word-index="0"]')
     await paragraph.waitFor();assert.equal(await paragraph.getAttribute('contenteditable'),'plaintext-only')

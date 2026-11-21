@@ -33,7 +33,7 @@ test("paired editors exchange real PDF and DOCX changes and export from either c
   })
   await clickTool(pc, pc.getByRole("button", { includeHidden: true, name: "Connect phone" }))
   const address = await pc.locator("#addresses code").first().textContent()
-  await phone.goto(address)
+  await require('./menu-helper.cjs').connectPhone(pc, phone, address)
   await phone.getByText("PDF ready", { exact: true }).waitFor()
   await clickTool(pc, pc.getByRole("button", { includeHidden: true, name: "Done" }))
   await pc.locator("#connection").getByText("Phone and PC connected").waitFor()

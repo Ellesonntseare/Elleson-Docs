@@ -7,24 +7,56 @@ if (process.env.ELLESON_DOCS_USER_DATA) app.setPath("userData", process.env.ELLE
 
 let window
 let host
-let openingWindow
-function showMainWindow(){
-  if(quitting)return
-  if(window&&!window.isDestroyed()){if(window.isMinimized())window.restore();window.show();window.focus();return}
-  if(openingWindow)return
-  openingWindow=true
-  try{
-    window=new BrowserWindow({title:"Elleson Docs",width:1220,height:870,minWidth:460,minHeight:420,autoHideMenuBar:true,backgroundColor:"#eef1ed",show:process.env.ELLESON_DOCS_TEST!=="1",icon:path.join(__dirname,"web","logo.png"),webPreferences:{preload:path.join(__dirname,"preload.cjs"),sandbox:true,contextIsolation:true}})
-    window.webContents.setWindowOpenHandler(()=>({action:"deny"}))
-    window.webContents.on("will-navigate",event=>event.preventDefault())
-    window.once("closed",()=>{window=null;if(!quitting)app.quit()})
-    window.webContents.on("render-process-gone",(_event,details)=>{if(!quitting&&details.reason!=="clean-exit"&&host)void window.loadURL(host.address+"/#owner="+host.owner).catch(error=>dialog.showErrorBox("Elleson Docs",error.message))})
-    if(host)void window.loadURL(host.address+"/#owner="+host.owner).catch(error=>dialog.showErrorBox("Elleson Docs",error.message))
-    else void window.loadURL("data:text/html;charset=utf-8,"+encodeURIComponent('<title>Elleson Docs</title><body><h1>Elleson Docs</h1><p>Opening your workspace...</p></body>'))
-  }finally{openingWindow=false}
-}
+let workspaceReady = false
 let quitting = false
 app.on('before-quit', () => { quitting = true })
+
+function focusMainWindow() {
+  if (quitting || !window || window.isDestroyed()) return
+  if (window.isMinimized()) window.restore()
+  window.show()
+  window.focus()
+}
+
+async function createMainWindow() {
+  const mainWindow = new BrowserWindow({
+    title: "Elleson Docs", width: 1220, height: 870, minWidth: 460, minHeight: 420,
+    autoHideMenuBar: true, backgroundColor: "#eef1ed", show: false,
+    icon: path.join(__dirname, "web", "logo.png"),
+    webPreferences: { preload: path.join(__dirname, "preload.cjs"), sandbox: true, contextIsolation: true }
+  })
+  window = mainWindow
+  const workspaceUrl = host.address + "/#owner=" + host.owner
+  let loading = true
+  let rendererExited = false
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
+  mainWindow.webContents.on("will-navigate", event => event.preventDefault())
+  mainWindow.once("closed", () => {
+    window = null
+    if (!quitting) app.quit()
+  })
+  mainWindow.webContents.on("render-process-gone", async (_event, details) => {
+    if (quitting || details.reason === "clean-exit") return
+    rendererExited = true
+    if (loading) return
+    loading = true
+    try {
+      await mainWindow.loadURL(workspaceUrl)
+    } catch (error) {
+      if (!quitting) dialog.showErrorBox("Elleson Docs", error.message)
+    } finally {
+      loading = false
+    }
+  })
+  try {
+    await mainWindow.loadURL(workspaceUrl)
+  } catch (error) {
+    if (quitting || (!rendererExited && error.code !== "ERR_ABORTED")) throw error
+    await mainWindow.loadURL(workspaceUrl)
+  } finally {
+    loading = false
+  }
+}
 let pending = process.argv.find(value => /\.(pdf|docx?|png|jpe?g|webp|gif|bmp)$/i.test(value))
 const originalFiles = new Map()
 let lockedDocument
@@ -70,18 +102,31 @@ if (!app.requestSingleInstanceLock()) app.quit()
 else {
   app.on("second-instance", (_, args) => {
     const filename = args.find(value => /\.(pdf|docx?|png|jpe?g|webp|gif|bmp)$/i.test(value))
-    if (host) void openDocument(filename)
+    if (workspaceReady) void openDocument(filename)
     else if (filename) pending = filename
-    if(app.isReady())showMainWindow()
+    focusMainWindow()
   })
-  app.on("activate",()=>{if(app.isReady())showMainWindow()})
+  app.on("activate", focusMainWindow)
   app.whenReady().then(async () => {
-    showMainWindow()
+    let splash
+    let progress = "Opening your workspace…"
+    const report = (number, total, filename) => {
+      progress = "Restoring " + number + " of " + total + " tabs · " + filename
+      if (splash && !splash.isDestroyed()) splash.setTitle(progress)
+    }
+    if (process.env.ELLESON_DOCS_TEST !== "1") {
+      splash = new BrowserWindow({width:500,height:180,resizable:false,autoHideMenuBar:true,
+        title:"Elleson Docs",backgroundColor:"#edf4f0",webPreferences:{sandbox:true,contextIsolation:true}})
+      splash.on("page-title-updated", event => event.preventDefault())
+      void splash.loadFile(path.join(__dirname,"web","resume.html")).then(()=>{
+        if(!splash.isDestroyed())splash.setTitle(progress)
+      }).catch(()=>{})
+    }
     const portFile = path.join(app.getPath("userData"), "port.json")
     let preferred = process.env.ELLESON_DOCS_TEST === "1" ? 0 : 16943
     try { preferred = process.env.ELLESON_DOCS_TEST === "1" ? 0 : JSON.parse(await fs.readFile(portFile, "utf8")).port || preferred } catch {}
-    try { host = await start(preferred, path.join(app.getPath("userData"), "recovery")) }
-    catch (error) { if (error.code !== "EADDRINUSE") throw error; host = await start(0, path.join(app.getPath("userData"), "recovery")) }
+    try { host = await start(preferred, path.join(app.getPath("userData"), "recovery"), report) }
+    catch (error) { if (error.code !== "EADDRINUSE") throw error; host = await start(0, path.join(app.getPath("userData"), "recovery"), report) }
     await fs.mkdir(app.getPath("userData"), { recursive: true })
     await fs.writeFile(portFile, JSON.stringify({ port: host.server.address().port }))
     try {
@@ -187,7 +232,10 @@ else {
       await host.markSaved(id, exported.changeNumber, exported)
       return { saved: true, destination: original.filename }
     })
-    await window.loadURL(host.address + "/#owner=" + host.owner)
+    await createMainWindow()
+    workspaceReady = true
+    if (splash && !splash.isDestroyed()) splash.destroy()
+    if (process.env.ELLESON_DOCS_TEST !== "1") focusMainWindow()
     await openDocument(pending)
   }).catch(error => {
     if (quitting) return

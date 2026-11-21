@@ -52,6 +52,7 @@ test('phone touch drawing and handwritten signatures remain in the exported PDF'
     await page.locator('#signature-insert').tap()
     const box=await page.locator('#ink-canvas').boundingBox()
     await page.touchscreen.tap(box.x+box.width*.2,box.y+box.height*.45)
+    await page.locator('.signature-placement').getByRole('button', { name: 'Place', exact: true }).tap()
     await waitForAsync(page, async owner=>(await(await fetch('/api/state',{headers:{Authorization:'Bearer '+owner}})).json()).document.marks.length===3,host.owner)
     const marks=host.getDocument().marks
     assert.equal(marks[1].group,marks[2].group)
